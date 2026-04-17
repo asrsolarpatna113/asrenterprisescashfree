@@ -1236,22 +1236,40 @@ async def cashfree_orders_webhook(request: Request):
         signature = request.headers.get("x-webhook-signature", "")
         timestamp = request.headers.get("x-webhook-timestamp", "")
         
-        # Webhook secret (currently not configured - skip verification)
-        webhook_secret = ""
-        
-        # Verify signature (skip if no secret configured)
-        signature_valid = True
+        # Webhook secret comes from environment via central config module.
+        webhook_secret = os.environ.get("CASHFREE_WEBHOOK_SECRET", "").strip()
+
+        # Verify signature. If a secret IS configured, signature MUST match
+        # (anti-spoofing). If no secret is configured we skip verification
+        # so dev / first-time setup still works, with a loud warning.
         if webhook_secret:
-            signature_valid = verify_webhook_signature(timestamp, raw_body, signature, webhook_secret)
-            if not signature_valid:
-                logger.warning(f"Invalid webhook signature from {request.client.host}")
+            if not signature or not timestamp:
+                logger.warning("Cashfree webhook missing signature/timestamp headers")
+                await db.cashfree_webhook_logs.insert_one({
+                    "id": webhook_id,
+                    "status": "missing_signature_headers",
+                    "received_at": received_at,
+                    "ip": request.client.host if request.client else "unknown",
+                })
+                raise HTTPException(status_code=401, detail="Missing webhook signature")
+
+            if not verify_webhook_signature(timestamp, raw_body, signature, webhook_secret):
+                logger.warning(
+                    "Invalid Cashfree webhook signature from %s",
+                    request.client.host if request.client else "unknown",
+                )
                 await db.cashfree_webhook_logs.insert_one({
                     "id": webhook_id,
                     "status": "signature_failed",
                     "received_at": received_at,
-                    "ip": request.client.host if request.client else "unknown"
+                    "ip": request.client.host if request.client else "unknown",
                 })
-                return {"status": "error", "message": "Invalid signature"}
+                raise HTTPException(status_code=401, detail="Invalid webhook signature")
+        else:
+            logger.warning(
+                "CASHFREE_WEBHOOK_SECRET is not set — webhook signature verification is DISABLED. "
+                "Set this env var in production to reject spoofed webhooks."
+            )
         
         # Parse payload
         try:
@@ -1488,7 +1506,10 @@ async def cashfree_orders_webhook(request: Request):
         )
         
         return {"status": "ok", "webhook_id": webhook_id, **processing_result}
-        
+
+    except HTTPException:
+        # Preserve auth/signature failures as proper HTTP error responses.
+        raise
     except Exception as e:
         logger.error(f"Webhook error: {e}")
         await db.cashfree_webhook_logs.update_one(
