@@ -1937,8 +1937,25 @@ async def direct_checkout_page(order_id: str):
     
     customer_name = order.get("customer_name", "Customer")
     amount = order.get("amount", 0)
-    
-    # Return HTML page with Cashfree SDK
+
+    # XSS-safe: escape every dynamic value before HTML interpolation. order_id,
+    # customer_name and payment_session_id are all attacker-influenceable.
+    import html as _html
+    safe_order_id = _html.escape(str(order_id), quote=True)
+    safe_customer_name = _html.escape(str(customer_name), quote=True)
+    safe_session_id = _html.escape(str(payment_session_id), quote=True)
+    # Choose checkout host based on sandbox flag so test orders go to sandbox.
+    checkout_action = (
+        "https://sandbox.cashfree.com/pg/view/sessions/checkout"
+        if CASHFREE_IS_SANDBOX
+        else "https://api.cashfree.com/pg/view/sessions/checkout"
+    )
+
+    # Bulletproof checkout: a tiny self-submitting HTML form that POSTs the
+    # session_id directly to Cashfree's hosted checkout URL. This works in
+    # every browser (including in-app browsers and restrictive networks)
+    # because it does NOT depend on loading sdk.cashfree.com — only the
+    # form submission to api.cashfree.com is needed.
     html_content = f"""
     <!DOCTYPE html>
     <html lang="en">
@@ -1946,241 +1963,72 @@ async def direct_checkout_page(order_id: str):
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Pay ₹{amount:,.0f} - ASR Enterprises</title>
-        <script src="https://sdk.cashfree.com/js/v3/cashfree.js"></script>
         <style>
             * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-            body {{
-                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-                min-height: 100vh;
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                color: white;
-            }}
-            .container {{
-                background: rgba(255, 255, 255, 0.05);
-                border-radius: 20px;
-                padding: 40px;
-                max-width: 420px;
-                width: 90%;
-                text-align: center;
-                backdrop-filter: blur(10px);
-                border: 1px solid rgba(255, 255, 255, 0.1);
-            }}
-            .logo {{
-                font-size: 48px;
-                margin-bottom: 20px;
-            }}
-            h1 {{
-                font-size: 24px;
-                margin-bottom: 10px;
-                color: #f59e0b;
-            }}
-            .amount {{
-                font-size: 48px;
-                font-weight: bold;
-                color: #22c55e;
-                margin: 20px 0;
-            }}
-            .order-info {{
-                background: rgba(0, 0, 0, 0.3);
-                border-radius: 12px;
-                padding: 15px;
-                margin: 20px 0;
-            }}
-            .order-info p {{
-                margin: 5px 0;
-                color: #9ca3af;
-                font-size: 14px;
-            }}
-            .order-info strong {{
-                color: #f59e0b;
-            }}
-            .loading {{
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-                margin: 30px 0;
-            }}
-            .spinner {{
-                width: 50px;
-                height: 50px;
-                border: 4px solid rgba(245, 158, 11, 0.3);
-                border-top-color: #f59e0b;
-                border-radius: 50%;
-                animation: spin 1s linear infinite;
-            }}
-            @keyframes spin {{
-                to {{ transform: rotate(360deg); }}
-            }}
-            .status {{
-                margin-top: 15px;
-                font-size: 16px;
-                color: #9ca3af;
-            }}
-            .error {{
-                background: rgba(239, 68, 68, 0.2);
-                border: 1px solid #ef4444;
-                border-radius: 12px;
-                padding: 20px;
-                margin: 20px 0;
-                display: none;
-            }}
-            .error h3 {{
-                color: #ef4444;
-                margin-bottom: 10px;
-            }}
-            .btn {{
-                display: inline-block;
-                background: #f59e0b;
-                color: #1a1a2e;
-                padding: 15px 30px;
-                border-radius: 10px;
-                text-decoration: none;
-                font-weight: bold;
-                margin-top: 15px;
-                cursor: pointer;
-                border: none;
-                font-size: 16px;
-            }}
-            .btn:hover {{
-                background: #d97706;
-            }}
-            .support {{
-                margin-top: 30px;
-                font-size: 12px;
-                color: #6b7280;
-            }}
-            .support a {{
-                color: #f59e0b;
-            }}
+            body {{ font-family: 'Segoe UI', Tahoma, sans-serif; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); min-height: 100vh; display: flex; justify-content: center; align-items: center; color: white; padding: 20px; }}
+            .container {{ background: rgba(255,255,255,0.05); border-radius: 20px; padding: 40px; max-width: 420px; width: 100%; text-align: center; border: 1px solid rgba(255,255,255,0.1); }}
+            .logo {{ font-size: 48px; margin-bottom: 16px; }}
+            h1 {{ font-size: 22px; color: #f59e0b; margin-bottom: 6px; }}
+            .sub {{ color: #9ca3af; font-size: 14px; }}
+            .amount {{ font-size: 44px; font-weight: bold; color: #22c55e; margin: 22px 0; }}
+            .order-info {{ background: rgba(0,0,0,0.3); border-radius: 12px; padding: 14px; margin: 18px 0; font-size: 13px; }}
+            .order-info p {{ margin: 4px 0; color: #9ca3af; }}
+            .order-info strong {{ color: #f59e0b; }}
+            .spinner {{ width: 44px; height: 44px; border: 4px solid rgba(245,158,11,0.3); border-top-color: #f59e0b; border-radius: 50%; animation: spin 1s linear infinite; margin: 18px auto; }}
+            @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+            .status {{ font-size: 14px; color: #9ca3af; margin-top: 8px; }}
+            .btn {{ display: inline-block; background: #f59e0b; color: #1a1a2e; padding: 14px 28px; border-radius: 10px; text-decoration: none; font-weight: bold; margin-top: 14px; cursor: pointer; border: none; font-size: 16px; }}
+            .support {{ margin-top: 24px; font-size: 12px; color: #6b7280; }}
+            .support a {{ color: #f59e0b; }}
         </style>
     </head>
     <body>
         <div class="container">
             <div class="logo">⚡</div>
             <h1>ASR Enterprises</h1>
-            <p>Solar Power Solutions</p>
-            
+            <p class="sub">Solar Power Solutions</p>
             <div class="amount">₹{amount:,.0f}</div>
-            
             <div class="order-info">
-                <p>Order ID: <strong>{order_id}</strong></p>
-                <p>Customer: <strong>{customer_name}</strong></p>
+                <p>Order ID: <strong>{safe_order_id}</strong></p>
+                <p>Customer: <strong>{safe_customer_name}</strong></p>
             </div>
-            
-            <div class="loading" id="loadingSection">
-                <div class="spinner"></div>
-                <p class="status" id="statusText">Initializing secure payment...</p>
-            </div>
-            
-            <div class="error" id="errorSection">
-                <h3>Payment Error</h3>
-                <p id="errorMessage"></p>
-                <button class="btn" onclick="retryPayment()">Try Again</button>
-            </div>
-            
+            <div class="spinner"></div>
+            <p class="status">Redirecting to secure payment page…</p>
+            <noscript>
+                <p class="status" style="color:#fbbf24;margin-top:10px;">JavaScript is off — tap the button below.</p>
+            </noscript>
+
+            <!-- Auto-submitting form: posts session_id to Cashfree-hosted checkout -->
+            <form id="cfForm" method="POST" action="{checkout_action}" accept-charset="UTF-8">
+                <input type="hidden" name="payment_session_id" value="{safe_session_id}">
+                <noscript>
+                    <button type="submit" class="btn">Continue to Payment</button>
+                </noscript>
+            </form>
+
             <div class="support">
                 Need help? Call <a href="tel:{ASR_DISPLAY_PHONE}">{ASR_DISPLAY_PHONE}</a>
             </div>
         </div>
-        
+
         <script>
-            const paymentSessionId = "{payment_session_id}";
-            const orderId = "{order_id}";
-            
-            console.log('=== ASR ENTERPRISES DIRECT CHECKOUT ===');
-            console.log('Order ID:', orderId);
-            console.log('Payment Session ID:', paymentSessionId);
-            console.log('Session ID Length:', paymentSessionId.length);
-            
-            function showError(message) {{
-                document.getElementById('loadingSection').style.display = 'none';
-                document.getElementById('errorSection').style.display = 'block';
-                document.getElementById('errorMessage').textContent = message;
-            }}
-            
-            function updateStatus(text) {{
-                document.getElementById('statusText').textContent = text;
-            }}
-            
-            function retryPayment() {{
-                document.getElementById('errorSection').style.display = 'none';
-                document.getElementById('loadingSection').style.display = 'flex';
-                initializePayment();
-            }}
-            
-            // Wait for Cashfree SDK to load
-            function waitForCashfree(maxWait = 10000) {{
-                return new Promise((resolve, reject) => {{
-                    const startTime = Date.now();
-                    
-                    function check() {{
-                        if (typeof Cashfree !== 'undefined') {{
-                            console.log('Cashfree SDK loaded successfully');
-                            resolve(Cashfree);
-                        }} else if (Date.now() - startTime > maxWait) {{
-                            reject(new Error('Cashfree SDK failed to load. Please refresh the page.'));
-                        }} else {{
-                            setTimeout(check, 200);
-                        }}
-                    }}
-                    
-                    check();
-                }});
-            }}
-            
-            async function initializePayment() {{
+            // Submit immediately — no third-party script needed.
+            (function() {{
                 try {{
-                    updateStatus('Loading Cashfree SDK...');
-                    
-                    // Validate session ID
-                    if (!paymentSessionId || paymentSessionId.length < 50) {{
-                        throw new Error('Invalid payment session. Please create a new order.');
-                    }}
-                    
-                    // Wait for Cashfree SDK to load
-                    const CashfreeSDK = await waitForCashfree();
-                    
-                    // Initialize Cashfree
-                    updateStatus('Initializing payment gateway...');
-                    const cashfree = CashfreeSDK({{ mode: "production" }});
-                    
-                    console.log('Cashfree SDK initialized in PRODUCTION mode');
-                    
-                    // Small delay for UI
-                    await new Promise(resolve => setTimeout(resolve, 300));
-                    
-                    updateStatus('Opening secure payment page...');
-                    
-                    // Launch checkout
-                    console.log('Calling cashfree.checkout() with:', {{
-                        paymentSessionId: paymentSessionId,
-                        redirectTarget: "_self"
-                    }});
-                    
-                    cashfree.checkout({{
-                        paymentSessionId: paymentSessionId,
-                        redirectTarget: "_self"
-                    }});
-                    
-                }} catch (error) {{
-                    console.error('Payment initialization error:', error);
-                    showError(error.message || 'Failed to initialize payment. Please try again.');
+                    document.getElementById('cfForm').submit();
+                }} catch (e) {{
+                    var s = document.querySelector('.status');
+                    if (s) s.innerHTML = 'Tap below to continue. <br><button class="btn" onclick="document.getElementById(\\'cfForm\\').submit()">Continue to Payment</button>';
                 }}
-            }}
-            
-            // Start payment on page load
-            document.addEventListener('DOMContentLoaded', function() {{
-                setTimeout(initializePayment, 500);
-            }});
+            }})();
         </script>
     </body>
     </html>
     """
-    
+
     return HTMLResponse(content=html_content)
+
+
 
 
 
