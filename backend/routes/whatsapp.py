@@ -81,22 +81,36 @@ def validate_phone_number(phone: str) -> bool:
     return len(cleaned) >= 12 and len(cleaned) <= 15
 
 async def get_whatsapp_settings() -> Optional[Dict]:
-    """Get WhatsApp API settings from database"""
-    settings = await db.whatsapp_settings.find_one({}, {"_id": 0})
-    if not settings:
-        # Try environment variables as fallback
-        access_token = os.environ.get("WHATSAPP_ACCESS_TOKEN", "")
-        phone_number_id = os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "")
-        if access_token and phone_number_id:
-            return {
-                "access_token": access_token,
-                "phone_number_id": phone_number_id,
-                "waba_id": os.environ.get("WHATSAPP_WABA_ID", ""),
-                "verify_token": os.environ.get("WHATSAPP_VERIFY_TOKEN", "asr_whatsapp_verify_2024"),
-                "default_country_code": "91",
-                "is_active": True
-            }
-    return settings
+    """
+    Get WhatsApp API settings.
+
+    Priority: env vars (production secrets) override empty/missing DB fields.
+    A stale DB document with empty access_token must NOT block the env-var
+    configuration. We merge env values into any missing/empty fields so a
+    half-filled DB doc cannot silently disable WhatsApp.
+    """
+    env_access_token = os.environ.get("WHATSAPP_ACCESS_TOKEN", "").strip()
+    env_phone_number_id = os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "").strip()
+    env_waba_id = os.environ.get("WHATSAPP_WABA_ID", "").strip()
+    env_verify_token = os.environ.get("WHATSAPP_VERIFY_TOKEN", "asr_whatsapp_verify_2024").strip()
+
+    settings = await db.whatsapp_settings.find_one({}, {"_id": 0}) or {}
+
+    # Merge: prefer DB value if non-empty, else fall back to env value.
+    merged = {
+        "access_token": settings.get("access_token") or env_access_token,
+        "phone_number_id": settings.get("phone_number_id") or env_phone_number_id,
+        "waba_id": settings.get("waba_id") or env_waba_id,
+        "verify_token": settings.get("verify_token") or env_verify_token,
+        "default_country_code": settings.get("default_country_code") or "91",
+        # Auto-active when env credentials are present, even if DB doc says inactive.
+        "is_active": bool(settings.get("is_active")) or bool(env_access_token and env_phone_number_id),
+        "updated_at": settings.get("updated_at", ""),
+    }
+
+    if not merged["access_token"] or not merged["phone_number_id"]:
+        return None
+    return merged
 
 async def send_whatsapp_template(
     phone: str,
@@ -245,8 +259,12 @@ async def send_whatsapp_template(
 
 @router.get("/settings")
 async def get_settings():
-    """Get WhatsApp API settings (masked for security)"""
-    settings = await db.whatsapp_settings.find_one({}, {"_id": 0})
+    """Get WhatsApp API settings (masked for security).
+
+    Uses the merged settings (env-vars overlay DB doc) so configuration that
+    is provided only via Replit Secrets shows as `configured: true`.
+    """
+    settings = await get_whatsapp_settings()
     if not settings:
         return {
             "configured": False,
@@ -258,17 +276,22 @@ async def get_settings():
             "is_active": False,
             "webhook_url": "/api/whatsapp/webhook"
         }
-    
+
     # Mask access token for security
     token = settings.get("access_token", "")
     masked_token = f"{token[:10]}...{token[-10:]}" if len(token) > 20 else "***"
-    
+
+    # Mask verify_token too — never echo secrets back over HTTP.
+    vt = settings.get("verify_token", "") or ""
+    masked_verify = f"{vt[:4]}…{vt[-4:]}" if len(vt) >= 10 else "***"
+
     return {
         "configured": True,
         "access_token": masked_token,
         "phone_number_id": settings.get("phone_number_id", ""),
         "waba_id": settings.get("waba_id", ""),
-        "verify_token": settings.get("verify_token", ""),
+        "verify_token": masked_verify,
+        "verify_token_set": bool(vt),
         "default_country_code": settings.get("default_country_code", "91"),
         "is_active": settings.get("is_active", False),
         "webhook_url": "/api/whatsapp/webhook",

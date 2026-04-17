@@ -1104,31 +1104,52 @@ const HomePage = () => {
     });
   };
 
-  // Direct Cashfree checkout - call SDK directly without redirect
-  const launchCashfreeCheckout = async (sessionId) => {
+  // Guard against duplicate checkout starts (auto setTimeout + manual click)
+  const checkoutLaunchedRef = useRef(false);
+
+  // Direct Cashfree checkout — try SDK in-page; fall back to backend-hosted
+  // checkout page (/api/cashfree/pay/<order_id>) on ANY failure. The hosted
+  // page reloads the SDK with the correct session ID and is bulletproof
+  // against ad-blockers, CSP issues, and SDK race conditions.
+  const launchCashfreeCheckout = async (sessionId, fallbackPaymentUrl) => {
+    if (checkoutLaunchedRef.current) {
+      console.warn('Cashfree checkout already launched — ignoring duplicate call');
+      return;
+    }
+    checkoutLaunchedRef.current = true;
+    // Reset guard if SDK fails fast (so user can retry)
+    setTimeout(() => { checkoutLaunchedRef.current = false; }, 8000);
+
+    const goToHostedFallback = (reason) => {
+      console.warn('Falling back to hosted Cashfree page:', reason);
+      if (fallbackPaymentUrl) {
+        window.location.href = fallbackPaymentUrl;
+      } else {
+        alert('Payment could not start in-page. Please try again or call 9296389097.');
+        setPaymentStep('form');
+      }
+    };
+
     try {
-      console.log('=== LAUNCHING CASHFREE SDK DIRECTLY ===');
-      console.log('Session ID:', sessionId);
-      console.log('Session ID length:', sessionId.length);
-      
+      if (!sessionId || sessionId.length < 50) {
+        return goToHostedFallback('invalid session id');
+      }
+
       const Cashfree = await loadCashfreeSDK();
-      console.log('Cashfree SDK loaded');
-      
-      const cashfree = Cashfree({ mode: "production" });
-      console.log('Cashfree initialized in PRODUCTION mode');
-      
-      const checkoutConfig = {
+      if (!Cashfree) return goToHostedFallback('SDK did not load');
+
+      const cashfree = Cashfree({ mode: 'production' });
+      const result = cashfree.checkout({
         paymentSessionId: sessionId,
-        redirectTarget: "_self"
-      };
-      
-      console.log('Calling cashfree.checkout() with config:', JSON.stringify(checkoutConfig));
-      cashfree.checkout(checkoutConfig);
-      
+        redirectTarget: '_self',
+      });
+
+      // v3 SDK returns a thenable; if it rejects, redirect to hosted page.
+      if (result && typeof result.then === 'function') {
+        result.catch((err) => goToHostedFallback(err && err.message));
+      }
     } catch (err) {
-      console.error('Cashfree SDK error:', err);
-      alert('Payment initialization failed. Please try again or call 9296389097');
-      setPaymentStep('form');
+      goToHostedFallback(err && err.message);
     }
   };
 
@@ -1196,7 +1217,10 @@ const HomePage = () => {
         // This is more reliable than redirecting to a checkout page
         console.log('=== LAUNCHING CASHFREE DIRECTLY (NO REDIRECT) ===');
         setTimeout(async () => {
-          await launchCashfreeCheckout(res.data.payment_session_id);
+          await launchCashfreeCheckout(
+            res.data.payment_session_id,
+            res.data.payment_url,
+          );
         }, 1500);
       } else {
         console.error('=== INVALID RESPONSE ===');
@@ -1263,7 +1287,10 @@ const HomePage = () => {
         // Launch Cashfree checkout
         console.log('=== LAUNCHING SITE VISIT PAYMENT ===');
         setTimeout(async () => {
-          await launchCashfreeCheckout(res.data.payment_session_id);
+          await launchCashfreeCheckout(
+            res.data.payment_session_id,
+            res.data.payment_url,
+          );
         }, 1000);
       } else {
         // Fallback to direct checkout page
@@ -2535,7 +2562,10 @@ const HomePage = () => {
                   </div>
                   
                   <button
-                    onClick={() => launchCashfreeCheckout(paymentSessionId)}
+                    onClick={() => launchCashfreeCheckout(
+                      paymentSessionId,
+                      paymentOrderId ? `${API}/cashfree/pay/${paymentOrderId}` : paymentLink,
+                    )}
                     className="inline-flex items-center justify-center gap-2 w-full bg-green-600 hover:bg-green-700 text-white py-4 rounded-xl font-bold text-lg transition"
                     data-testid="pay-now-btn"
                   >

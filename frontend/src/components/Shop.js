@@ -250,32 +250,50 @@ export const ShopPage = () => {
       const paymentSessionId = res.data.payment_session_id;
       
       if (checkoutData.payment_method === "online" && paymentSessionId) {
+        // Backend stores the order in cashfree_orders by cf order_id, so
+        // /api/cashfree/pay/<cf_order_id> serves a hosted checkout page that
+        // works as a reliable fallback if the in-page SDK fails to launch.
+        const cfOrderId = res.data.cashfree_order_id;
+        const hostedCheckoutUrl = cfOrderId
+          ? `${API}/cashfree/pay/${cfOrderId}`
+          : null;
+
+        const goHosted = (reason) => {
+          console.warn('Cashfree SDK fallback ->', reason);
+          if (hostedCheckoutUrl) {
+            window.location.href = hostedCheckoutUrl;
+          } else {
+            alert('Payment could not be processed. Please try again or call 8877896889.');
+            setPlacingOrder(false);
+          }
+        };
+
         try {
-          // Load Cashfree SDK
-          const loadCashfreeSDK = () => {
-            return new Promise((resolve, reject) => {
-              if (window.Cashfree) { resolve(window.Cashfree); return; }
-              const script = document.createElement('script');
-              script.src = 'https://sdk.cashfree.com/js/v3/cashfree.js';
-              script.async = true;
-              script.onload = () => window.Cashfree ? resolve(window.Cashfree) : reject(new Error('Cashfree SDK failed'));
-              script.onerror = () => reject(new Error('Failed to load Cashfree SDK'));
-              document.body.appendChild(script);
-            });
-          };
-          
+          const loadCashfreeSDK = () => new Promise((resolve, reject) => {
+            if (window.Cashfree) { resolve(window.Cashfree); return; }
+            const script = document.createElement('script');
+            script.src = 'https://sdk.cashfree.com/js/v3/cashfree.js';
+            script.async = true;
+            script.onload = () => window.Cashfree
+              ? resolve(window.Cashfree)
+              : reject(new Error('Cashfree SDK failed'));
+            script.onerror = () => reject(new Error('Failed to load Cashfree SDK'));
+            document.body.appendChild(script);
+          });
+
           const Cashfree = await loadCashfreeSDK();
           const cashfree = Cashfree({ mode: "production" });
-          
-          cashfree.checkout({
+
+          const result = cashfree.checkout({
             paymentSessionId: paymentSessionId,
-            redirectTarget: "_self"
+            redirectTarget: "_self",
           });
-          return; // Cashfree will redirect
+          if (result && typeof result.then === 'function') {
+            result.catch((err) => goHosted(err && err.message));
+          }
+          return; // either redirected or hosted-fallback will redirect
         } catch (paymentErr) {
-          console.error("Payment error:", paymentErr);
-          alert("Payment could not be processed. Please try again or call 8877896889.");
-          setPlacingOrder(false);
+          goHosted(paymentErr && paymentErr.message);
           return;
         }
       }
