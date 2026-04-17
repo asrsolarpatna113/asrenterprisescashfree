@@ -89,21 +89,21 @@ Go to: **Rules → Page Rules**
 
 ### Rule 1: Cache Static Assets
 ```
-URL: www.asrenterprisespatna.com/static/*
+URL: www.asrenterprises.in/static/*
 Setting: Cache Level = Cache Everything
 Edge Cache TTL: 1 month
 ```
 
 ### Rule 2: Bypass Cache for Admin
 ```
-URL: www.asrenterprisespatna.com/admin/*
+URL: www.asrenterprises.in/admin/*
 Setting: Cache Level = Bypass
 Security Level: High
 ```
 
 ### Rule 3: Force HTTPS
 ```
-URL: http://asrenterprisespatna.com/*
+URL: http://asrenterprises.in/*
 Setting: Always Use HTTPS
 ```
 

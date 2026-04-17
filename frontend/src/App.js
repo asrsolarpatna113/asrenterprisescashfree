@@ -2740,7 +2740,9 @@ export default function App() {
           
           {/* Payment Status Pages */}
           <Route path="/payment/success" element={<PaymentSuccess />} />
+          <Route path="/payment-success" element={<PaymentSuccess />} />
           <Route path="/payment/failed" element={<PaymentFailed />} />
+          <Route path="/payment-failed" element={<PaymentFailed />} />
           <Route path="/payment/pending" element={<PaymentPending />} />
           <Route path="/payment/status" element={<PaymentStatus />} />
           <Route path="/payment/checkout" element={<CashfreeCheckout />} />
