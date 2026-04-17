@@ -6706,10 +6706,10 @@ _Please contact the customer within 24 hours to schedule the service!_"""
 # MSG91 OTP - BACKEND API (RELIABLE)
 # =============================================
 
-MSG91_AUTH_KEY = os.environ.get("MSG91_AUTH_KEY", "498782AgUBJ95znFEJ69d7f0a6P1")
-MSG91_SENDER_ID = "ASRSOL"
-MSG91_WIDGET_ID = "366367775a6a363731333933"
-MSG91_TOKEN_AUTH = "498782Ts6ZESL8A69acbb0aP1"
+MSG91_AUTH_KEY = os.environ.get("MSG91_AUTH_KEY", "")
+MSG91_SENDER_ID = os.environ.get("MSG91_SENDER_ID", "ASRSOL")
+MSG91_WIDGET_ID = os.environ.get("MSG91_WIDGET_ID", "")
+MSG91_TOKEN_AUTH = os.environ.get("MSG91_TOKEN_AUTH", "")
 
 @api_router.post("/otp/send")
 async def send_otp(request: Request, data: Dict[str, Any]):
@@ -7519,10 +7519,15 @@ async def create_order(order_data: Dict[str, Any]):
     # If online payment, create Cashfree order
     if order.payment_method == "online":
         try:
-            # Cashfree production credentials (same as cashfree_orders.py)
-            cf_app_id = "12549525aaaf9a53607bb180e232594521"
-            cf_secret = "cfsk_ma_prod_6abd08de6c87e078b9051fcbc50064c0_7af3b19b"
+            # Cashfree production credentials — env vars only (see cashfree_orders.py)
+            cf_app_id = os.environ.get("CASHFREE_API_KEY", "")
+            cf_secret = os.environ.get("CASHFREE_SECRET_KEY", "")
             cf_api_url = "https://api.cashfree.com/pg"
+            if not cf_app_id or not cf_secret:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Cashfree credentials not configured (CASHFREE_API_KEY / CASHFREE_SECRET_KEY).",
+                )
             
             cf_order_id = f"SHOP{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}{str(uuid.uuid4())[:4].upper()}"
             
@@ -7676,10 +7681,15 @@ async def verify_cashfree_shop_payment(data: Dict[str, Any]):
         customer_whatsapp_url = f"https://wa.me/91{phone[-10:]}?text={wa_msg}" if phone else None
         return {"success": True, "order": {**order, "payment_completed": True, "customer_whatsapp_url": customer_whatsapp_url}}
 
-    # Verify with Cashfree API
-    cf_app_id = "12549525aaaf9a53607bb180e232594521"
-    cf_secret = "cfsk_ma_prod_6abd08de6c87e078b9051fcbc50064c0_7af3b19b"
+    # Verify with Cashfree API — env vars only (see cashfree_orders.py)
+    cf_app_id = os.environ.get("CASHFREE_API_KEY", "")
+    cf_secret = os.environ.get("CASHFREE_SECRET_KEY", "")
     cf_api_url = "https://api.cashfree.com/pg"
+    if not cf_app_id or not cf_secret:
+        raise HTTPException(
+            status_code=503,
+            detail="Cashfree credentials not configured (CASHFREE_API_KEY / CASHFREE_SECRET_KEY).",
+        )
     payment_verified = False
     cf_payment_id = ""
 

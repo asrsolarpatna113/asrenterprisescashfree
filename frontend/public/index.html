@@ -365,12 +365,13 @@
                 : window.location.origin;
             
             // MSG91 Production Configuration
-            // Widget ID: 366367775a6a363731333933
-            // Token Auth: 498782Ts6ZESL8A69acbb0aP1
-            // Make sure your domain is whitelisted in MSG91 dashboard
+            // Widget ID and Token Auth are injected at build time via env vars:
+            //   REACT_APP_MSG91_WIDGET_ID
+            //   REACT_APP_MSG91_TOKEN_AUTH
+            // Make sure your domain is whitelisted in MSG91 dashboard.
             window.msg91Configuration = {
-                widgetId: "366367775a6a363731333933",
-                tokenAuth: "498782Ts6ZESL8A69acbb0aP1",
+                widgetId: "%REACT_APP_MSG91_WIDGET_ID%",
+                tokenAuth: "%REACT_APP_MSG91_TOKEN_AUTH%",
                 identifier: "",
                 exposeMethods: true,
                 success: function (data) {

@@ -347,9 +347,9 @@ const SolarInquiryForm = () => {
   const [resendTimer, setResendTimer] = useState(0);
   const timerRef = useRef(null);
 
-  // MSG91 Widget Configuration
-  const MSG91_WIDGET_ID = "366367775a6a363731333933";
-  const MSG91_AUTH_TOKEN = "498782Ts6ZESL8A69acbb0aP1";
+  // MSG91 Widget Configuration (read from env; baked in at build time)
+  const MSG91_WIDGET_ID = process.env.REACT_APP_MSG91_WIDGET_ID || "";
+  const MSG91_AUTH_TOKEN = process.env.REACT_APP_MSG91_TOKEN_AUTH || "";
 
   // Countdown timer for resend OTP
   useEffect(() => {
@@ -2958,9 +2958,9 @@ const LeadCapturePage = () => {
   const [resendTimer, setResendTimer] = useState(0);
   const timerRef = useRef(null);
 
-  // MSG91 Widget Configuration
-  const MSG91_WIDGET_ID = "366367775a6a363731333933";
-  const MSG91_AUTH_TOKEN = "498782Ts6ZESL8A69acbb0aP1";
+  // MSG91 Widget Configuration (read from env; baked in at build time)
+  const MSG91_WIDGET_ID = process.env.REACT_APP_MSG91_WIDGET_ID || "";
+  const MSG91_AUTH_TOKEN = process.env.REACT_APP_MSG91_TOKEN_AUTH || "";
 
   // Countdown timer for resend OTP
   useEffect(() => {

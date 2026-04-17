@@ -34,12 +34,15 @@ db = client[DB_NAME]
 # ==================== CONSTANTS ====================
 CASHFREE_API_VERSION = "2023-08-01"
 
-# ========== HARDCODED PRODUCTION CREDENTIALS ==========
-# These are the ONLY credentials that should be used
-# DO NOT use database or environment overrides
-CASHFREE_PRODUCTION_APP_ID = "12549525aaaf9a53607bb180e232594521"
-CASHFREE_PRODUCTION_SECRET_KEY = "cfsk_ma_prod_6abd08de6c87e078b9051fcbc50064c0_7af3b19b"
-CASHFREE_IS_SANDBOX = False  # ALWAYS PRODUCTION - NEVER SANDBOX
+# ========== PRODUCTION CREDENTIALS (from environment) ==========
+# Credentials MUST be supplied via environment variables / Replit Secrets:
+#   CASHFREE_API_KEY     -> Cashfree App ID (x-client-id)
+#   CASHFREE_SECRET_KEY  -> Cashfree Secret Key (x-client-secret)
+# Never hardcode live keys in source. The app will fail fast on first
+# Cashfree call if these are missing, surfacing a clear configuration error.
+CASHFREE_PRODUCTION_APP_ID = os.environ.get("CASHFREE_API_KEY", "")
+CASHFREE_PRODUCTION_SECRET_KEY = os.environ.get("CASHFREE_SECRET_KEY", "")
+CASHFREE_IS_SANDBOX = os.environ.get("CASHFREE_IS_SANDBOX", "false").lower() == "true"
 
 # Cashfree API URLs
 CASHFREE_PRODUCTION_API_URL = "https://api.cashfree.com/pg"

@@ -30,12 +30,8 @@ next-env.d.ts
 dist/
 dist
 
-# Environment files (comprehensive coverage)
-
-*token.json*
-*credentials.json*
-
 # Logs and debug files
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -48,7 +44,8 @@ dump.rdb
 
 # Python
 __pycache__/
-*pyc*
+*.pyc
+*.pyo
 venv/
 .venv/
 
@@ -63,6 +60,7 @@ chainlit.md
 
 # Data and databases
 agenthub/agents/youtube/db
+backend/data/
 
 # Archive files and large assets
 **/*.zip
@@ -77,46 +75,23 @@ agenthub/agents/youtube/db
 .cache/
 
 # Mobile development
-android-sdk/ frontend/node_modules/.cache/default-development/0.pack
-frontend/node_modules/.cache/default-development/0.pack
--e 
--e 
-# Environment files
+android-sdk/
+frontend/node_modules/.cache/
+
+# Sensitive directories — may contain credentials, tokens or PII
+test_reports/
+memory/
+.local/
+attached_assets/
+
+# Environment and credential files
+.env
+.env.*
 *.env
 *.env.*
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
+*token.json*
+*credentials.json*
 credentials.json
-*.pem
-*.key
 .credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
 *.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
+secrets.json
