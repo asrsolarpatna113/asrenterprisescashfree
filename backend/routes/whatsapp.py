@@ -96,12 +96,14 @@ async def get_whatsapp_settings() -> Optional[Dict]:
 
     settings = await db.whatsapp_settings.find_one({}, {"_id": 0}) or {}
 
-    # Merge: prefer DB value if non-empty, else fall back to env value.
+    # Env wins (canonical secret source). DB only fills in when env is empty.
+    # This prevents a stale/empty DB doc from silently disabling WhatsApp even
+    # when the env vars are correctly configured in production.
     merged = {
-        "access_token": settings.get("access_token") or env_access_token,
-        "phone_number_id": settings.get("phone_number_id") or env_phone_number_id,
-        "waba_id": settings.get("waba_id") or env_waba_id,
-        "verify_token": settings.get("verify_token") or env_verify_token,
+        "access_token": env_access_token or settings.get("access_token", ""),
+        "phone_number_id": env_phone_number_id or settings.get("phone_number_id", ""),
+        "waba_id": env_waba_id or settings.get("waba_id", ""),
+        "verify_token": env_verify_token or settings.get("verify_token", ""),
         "default_country_code": settings.get("default_country_code") or "91",
         # Auto-active when env credentials are present, even if DB doc says inactive.
         "is_active": bool(settings.get("is_active")) or bool(env_access_token and env_phone_number_id),

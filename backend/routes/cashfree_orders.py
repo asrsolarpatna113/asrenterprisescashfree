@@ -233,26 +233,39 @@ async def send_payment_whatsapp(phone: str, customer_name: str, amount: float,
                 logger.info(f"[WhatsApp] SKIP - Already sent for order {order_id} (idempotency)")
                 return True  # Return True as message was already sent successfully before
         
-        # Get WhatsApp settings from database
-        wa_settings = await db.whatsapp_settings.find_one({}, {"_id": 0})
-        if not wa_settings or not wa_settings.get("access_token"):
-            logger.warning(f"[WhatsApp] Not configured - missing access_token. Order: {order_id}")
-            await log_whatsapp_attempt(order_id, phone, msg_type, "failed", "WhatsApp not configured - missing access_token")
+        # Use the central env-merging helper so production WHATSAPP_ACCESS_TOKEN /
+        # WHATSAPP_PHONE_NUMBER_ID env vars are honored even when the DB
+        # whatsapp_settings doc is empty or stale. This was the actual cause of
+        # webhook-confirmations silently returning whatsapp_sent=False.
+        from routes.whatsapp import get_whatsapp_settings
+        wa_settings = await get_whatsapp_settings()
+        if not wa_settings:
+            logger.warning(
+                f"[WhatsApp] NOT CONFIGURED - no access_token from env or DB. "
+                f"Set WHATSAPP_ACCESS_TOKEN + WHATSAPP_PHONE_NUMBER_ID. Order: {order_id}"
+            )
+            await log_whatsapp_attempt(order_id, phone, msg_type, "failed", "WhatsApp not configured (env+DB both empty)")
             return False
-        
+
+        access_token = wa_settings.get("access_token")
+        phone_number_id = wa_settings.get("phone_number_id")
+        cred_source = "env" if os.environ.get("WHATSAPP_ACCESS_TOKEN", "").strip() else "db"
+
+        if not access_token or not phone_number_id:
+            logger.warning(f"[WhatsApp] Incomplete credentials (source={cred_source}). Order: {order_id}")
+            await log_whatsapp_attempt(order_id, phone, msg_type, "failed", "Missing phone_number_id or access_token")
+            return False
+
         cleaned_phone = clean_phone_with_country(phone)
         if not cleaned_phone:
             logger.warning(f"[WhatsApp] Invalid phone: {phone}, Order: {order_id}")
             await log_whatsapp_attempt(order_id, phone, msg_type, "failed", "Invalid phone number")
             return False
-        
-        access_token = wa_settings.get("access_token")
-        phone_number_id = wa_settings.get("phone_number_id")
-        
-        if not access_token or not phone_number_id:
-            logger.warning(f"[WhatsApp] Missing credentials. Order: {order_id}")
-            await log_whatsapp_attempt(order_id, phone, msg_type, "failed", "Missing phone_number_id or access_token")
-            return False
+
+        logger.info(
+            f"[WhatsApp] TRIGGERED - order={order_id}, phone={cleaned_phone}, "
+            f"type={msg_type}, cred_source={cred_source}"
+        )
         
         # Get current date/time in IST
         from datetime import datetime, timezone, timedelta
@@ -1349,6 +1362,21 @@ async def _mark_order_paid(order: Dict, payment_data: Dict, source: str = "webho
         logger.error(f"[{source}] send_payment_confirmations failed for {order_id}: {e}")
         confirmations = {"error": str(e)}
 
+    # Persist confirmation outcome on the order so the webhook handler can
+    # detect "paid but WhatsApp never reached the customer" on a duplicate
+    # success-webhook arrival and re-attempt the send.
+    try:
+        await db.cashfree_orders.update_one(
+            {"order_id": order_id},
+            {"$set": {
+                "whatsapp_sent": bool(confirmations.get("whatsapp_sent")),
+                "whatsapp_last_error": confirmations.get("error"),
+                "confirmations_attempted_at": received_at,
+            }},
+        )
+    except Exception as persist_err:
+        logger.warning(f"[{source}] Could not persist confirmation outcome for {order_id}: {persist_err}")
+
     logger.info(
         f"Payment SUCCESS via {source}: order={order_id}, amount={payment_amount}, "
         f"service_booking={service_booking_synced}, confirmations={confirmations}"
@@ -1597,21 +1625,39 @@ async def cashfree_orders_webhook(request: Request):
         
         event_type = payload.get("type", "")
         data = payload.get("data", {})
-        
-        # Extract order info
-        order_data = data.get("order", {})
-        order_id = order_data.get("order_id", "")
-        payment_data = data.get("payment", {})
-        
-        logger.info(f"Cashfree webhook: {event_type}, order_id={order_id}")
-        
-        # Check idempotency
+
+        # Extract order info — also try `order_id` at the top level of `data`
+        # for older event shapes / payment-link variants.
+        order_data = data.get("order", {}) if isinstance(data.get("order"), dict) else {}
+        order_id = (
+            order_data.get("order_id")
+            or data.get("order_id")
+            or payload.get("order_id")
+            or ""
+        ).strip()
+        payment_data = data.get("payment", {}) if isinstance(data.get("payment"), dict) else {}
+        payment_status = (payment_data.get("payment_status") or "").upper()
+        order_status = (order_data.get("order_status") or "").upper()
+
+        # Step 1: webhook RECEIVED (full payload echoed at debug for diagnosis)
+        logger.info(
+            f"[CF-Webhook] RECEIVED type={event_type!r} order_id={order_id!r} "
+            f"payment_status={payment_status!r} order_status={order_status!r} "
+            f"sig_verified={signature_valid} from={request.client.host if request.client else '?'}"
+        )
+        logger.debug(f"[CF-Webhook] Full payload: {raw_body[:2000]}")
+
+        # Idempotency: only block retries when the FIRST attempt actually
+        # processed successfully. If the first attempt failed (e.g. order
+        # arrived out-of-order with the create-order call), Cashfree's retries
+        # MUST be allowed to retry — otherwise the payment is lost forever.
         idempotency_key = f"{event_type}:{order_id}:{payment_data.get('cf_payment_id', '')}"
-        existing = await db.cashfree_webhook_logs.find_one({
-            "idempotency_key": idempotency_key,
-            "status": "processed"
-        })
+        existing = await db.cashfree_webhook_logs.find_one(
+            {"idempotency_key": idempotency_key, "status": "processed",
+             "processing_result.processed": True}
+        )
         if existing:
+            logger.info(f"[CF-Webhook] Idempotent skip — already successfully processed: {idempotency_key}")
             return {"status": "ok", "message": "Already processed"}
         
         # Log webhook
@@ -1631,11 +1677,70 @@ async def cashfree_orders_webhook(request: Request):
         # Process based on event type
         processing_result = {"processed": False}
         
-        if event_type in ["PAYMENT_SUCCESS_WEBHOOK", "PAYMENT_SUCCESS"]:
+        # Treat any of these signals as a successful payment.
+        is_success_event = (
+            event_type in ["PAYMENT_SUCCESS_WEBHOOK", "PAYMENT_SUCCESS"]
+            or payment_status == "SUCCESS"
+            or order_status == "PAID"
+        )
+
+        if is_success_event:
+            # Step 2: try to find the order in DB by exact order_id.
             order = await db.cashfree_orders.find_one({"order_id": order_id}, {"_id": 0})
 
             if order:
-                # Delegate to the shared helper so webhook + sync stay identical.
+                logger.info(
+                    f"[CF-Webhook] ORDER FOUND order_id={order_id} "
+                    f"current_status={order.get('status')!r} amount={order.get('amount')} "
+                    f"prev_whatsapp_sent={order.get('whatsapp_sent')}"
+                )
+                # Resend safety net: if the order is already paid but the
+                # previous WhatsApp send failed, this duplicate webhook is
+                # our chance to retry the customer notification.
+                if order.get("status") == "paid" and not order.get("whatsapp_sent"):
+                    logger.warning(
+                        f"[CF-Webhook] RESENDING WhatsApp — order {order_id} is paid "
+                        f"but whatsapp_sent={order.get('whatsapp_sent')!r}, "
+                        f"prev_error={order.get('whatsapp_last_error')!r}"
+                    )
+                    try:
+                        retry_confirmations = await send_payment_confirmations(
+                            order=order, order_id=order_id,
+                            amount=order.get("payment_amount_received") or order.get("amount", 0),
+                        )
+                        await db.cashfree_orders.update_one(
+                            {"order_id": order_id},
+                            {"$set": {
+                                "whatsapp_sent": bool(retry_confirmations.get("whatsapp_sent")),
+                                "whatsapp_last_error": retry_confirmations.get("error"),
+                                "confirmations_resent_at": received_at,
+                            }},
+                        )
+                        processing_result = {
+                            "processed": True,
+                            "message": "Already paid — confirmation resend attempted",
+                            "confirmations": retry_confirmations,
+                        }
+                        logger.info(
+                            f"[CF-Webhook] RESEND result for {order_id}: "
+                            f"whatsapp_sent={retry_confirmations.get('whatsapp_sent')}"
+                        )
+                    except Exception as resend_err:
+                        logger.error(f"[CF-Webhook] Resend failed for {order_id}: {resend_err}")
+                        processing_result = {
+                            "processed": True,
+                            "message": f"Already paid — resend failed: {resend_err}",
+                        }
+                    # Skip the normal _mark_order_paid call (atomic guard would no-op anyway)
+                    await db.cashfree_webhook_logs.update_one(
+                        {"id": webhook_id},
+                        {"$set": {"status": "processed", "processing_result": processing_result}},
+                    )
+                    return {"status": "ok", "webhook_id": webhook_id, **processing_result}
+
+                # Step 3: delegate to the shared helper. It atomically marks
+                # the order paid, upserts db.payments, syncs the service
+                # booking, updates lead stage, and fires WhatsApp.
                 processing_result = await _mark_order_paid(
                     order=order,
                     payment_data={
@@ -1647,8 +1752,21 @@ async def cashfree_orders_webhook(request: Request):
                     },
                     source="webhook",
                 )
+                wa_status = (processing_result.get("confirmations") or {}).get("whatsapp_sent")
+                logger.info(
+                    f"[CF-Webhook] DB UPDATED order_id={order_id} "
+                    f"processed={processing_result.get('processed')} "
+                    f"whatsapp_sent={wa_status}"
+                )
             else:
-                processing_result = {"processed": False, "message": "Order not found"}
+                # Step 2-fail: order missing in DB. Log loudly so it is
+                # visible in production console — this means create-order
+                # never wrote the row, OR the order_id format diverges.
+                logger.error(
+                    f"[CF-Webhook] ORDER NOT FOUND in cashfree_orders for order_id={order_id!r}. "
+                    f"Reconciliation loop will retry every 5 min via Cashfree GET /orders/{{id}}."
+                )
+                processing_result = {"processed": False, "message": "Order not found in DB", "order_id": order_id}
         
         elif event_type in ["PAYMENT_FAILED_WEBHOOK", "PAYMENT_FAILED"]:
             order = await db.cashfree_orders.find_one({"order_id": order_id}, {"_id": 0})
