@@ -48,3 +48,5 @@ build = ["bash", "-c", "cd frontend && npm install --no-audit --no-fund && npm r
 [userenv.production]
 ENVIRONMENT = "production"
 CORS_ORIGINS = "https://asrenterprises.in,https://www.asrenterprises.in"
+
+[userenv.shared]
