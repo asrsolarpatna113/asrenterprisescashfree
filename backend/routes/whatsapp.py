@@ -1790,7 +1790,7 @@ async def webhook_verify(request: Request):
     settings = await get_whatsapp_settings()
     verify_token = settings.get("verify_token", "asr_whatsapp_verify_2024") if settings else "asr_whatsapp_verify_2024"
     
-    logger.info(f"Webhook verification request - Mode: {mode}, Token received: {token}, Expected token: {verify_token}, Challenge: {challenge}")
+    logger.info(f"Webhook verification request - Mode: {mode}, Token: ***masked***, Challenge: {challenge}")
     
     if mode == "subscribe" and token == verify_token:
         if challenge:
@@ -1801,7 +1801,7 @@ async def webhook_verify(request: Request):
             logger.warning("WhatsApp webhook verification: No challenge provided")
             return PlainTextResponse(content="Missing challenge", status_code=400)
     else:
-        logger.warning(f"WhatsApp webhook verification failed. Mode: {mode}, Token: {token}, Expected: {verify_token}")
+        logger.warning(f"WhatsApp webhook verification failed. Mode: {mode}, token mismatch")
         return PlainTextResponse(content="Verification failed", status_code=403)
 
 @router.post("/webhook")

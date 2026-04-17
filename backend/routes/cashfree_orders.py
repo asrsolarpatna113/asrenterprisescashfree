@@ -153,17 +153,35 @@ async def get_cashfree_config() -> Optional[Dict]:
     }
 
 def get_cashfree_api_url(is_sandbox: bool = False) -> str:
-    """Get Cashfree API base URL - ALWAYS returns PRODUCTION URL"""
-    # FORCE PRODUCTION - ignore is_sandbox parameter
+    """Get Cashfree API base URL based on env-driven sandbox flag."""
+    if CASHFREE_IS_SANDBOX or is_sandbox:
+        return CASHFREE_SANDBOX_API_URL
     return CASHFREE_PRODUCTION_API_URL
 
+def _require_cashfree_creds() -> None:
+    """Fail fast with a clear 503 if Cashfree credentials aren't configured.
+
+    All Cashfree API call sites must invoke this before building headers so
+    we never silently send empty credentials. No values are ever logged.
+    """
+    if not CASHFREE_PRODUCTION_APP_ID or not CASHFREE_PRODUCTION_SECRET_KEY:
+        logger.error(
+            "Cashfree credentials missing: "
+            "set CASHFREE_API_KEY and CASHFREE_SECRET_KEY in environment."
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Missing environment configuration: CASHFREE_API_KEY / CASHFREE_SECRET_KEY",
+        )
+
 def get_cashfree_headers(config: Dict) -> Dict:
-    """Get headers for Cashfree API requests"""
+    """Get headers for Cashfree API requests (env-only credentials)."""
+    _require_cashfree_creds()
     return {
         "Content-Type": "application/json",
-        "x-client-id": CASHFREE_PRODUCTION_APP_ID,  # Use hardcoded
-        "x-client-secret": CASHFREE_PRODUCTION_SECRET_KEY,  # Use hardcoded
-        "x-api-version": CASHFREE_API_VERSION
+        "x-client-id": CASHFREE_PRODUCTION_APP_ID,
+        "x-client-secret": CASHFREE_PRODUCTION_SECRET_KEY,
+        "x-api-version": CASHFREE_API_VERSION,
     }
 
 def verify_webhook_signature(timestamp: str, raw_body: str, signature: str, secret: str) -> bool:
@@ -766,39 +784,38 @@ async def update_lead_after_payment(lead_id: str, payment_type: str, amount: flo
 
 @router.get("/config")
 async def get_payment_config():
-    """Get Cashfree configuration status - ALWAYS PRODUCTION"""
+    """Get Cashfree configuration status (no credentials are ever returned)."""
+    configured = bool(CASHFREE_PRODUCTION_APP_ID and CASHFREE_PRODUCTION_SECRET_KEY)
     return {
-        "configured": True,
-        "environment": "PRODUCTION",  # HARDCODED - ALWAYS PRODUCTION
+        "configured": configured,
+        "environment": "SANDBOX" if CASHFREE_IS_SANDBOX else "PRODUCTION",
         "api_mode": "orders_api",
-        "app_id_preview": CASHFREE_PRODUCTION_APP_ID[:8] + "...",  # Show first 8 chars
-        "is_sandbox": False,  # ALWAYS FALSE
+        "is_sandbox": CASHFREE_IS_SANDBOX,
         "support_email": ASR_SUPPORT_EMAIL,
         "support_phone": ASR_DISPLAY_PHONE,
         "whatsapp_api_phone": ASR_WHATSAPP_API_PHONE,
         "business_name": ASR_BUSINESS_NAME,
         "payment_types": PAYMENT_TYPES,
-        "message": "Using HARDCODED PRODUCTION credentials"
+        "message": "Credentials loaded from environment" if configured
+                   else "Missing CASHFREE_API_KEY / CASHFREE_SECRET_KEY",
     }
 
 @router.post("/create-order")
 async def create_cashfree_order(request: CreateOrderRequest):
-    """Create a new Cashfree order for hosted checkout - USES HARDCODED PRODUCTION CREDENTIALS"""
+    """Create a new Cashfree order for hosted checkout (env-only credentials)."""
     try:
-        # ALWAYS use production API URL
-        base_url = CASHFREE_PRODUCTION_API_URL
-        
-        # ALWAYS use hardcoded production headers
+        _require_cashfree_creds()
+        base_url = get_cashfree_api_url()
+
         headers = {
             "Content-Type": "application/json",
             "x-client-id": CASHFREE_PRODUCTION_APP_ID,
             "x-client-secret": CASHFREE_PRODUCTION_SECRET_KEY,
-            "x-api-version": CASHFREE_API_VERSION
+            "x-api-version": CASHFREE_API_VERSION,
         }
-        
-        logger.info("Creating Cashfree order with HARDCODED PRODUCTION credentials")
+
+        logger.info("Creating Cashfree order")
         logger.info(f"API URL: {base_url}")
-        logger.info(f"App ID: {CASHFREE_PRODUCTION_APP_ID[:10]}...")
         
         # Generate order ID
         order_id = generate_order_id()
@@ -1064,15 +1081,15 @@ async def get_order_status(order_id: str):
 
 @router.get("/order/{order_id}/refresh")
 async def refresh_order_status(order_id: str):
-    """Refresh order status from Cashfree API - USES HARDCODED PRODUCTION CREDENTIALS"""
+    """Refresh order status from Cashfree API (env-only credentials)."""
     try:
-        # ALWAYS use production API
-        base_url = CASHFREE_PRODUCTION_API_URL
+        _require_cashfree_creds()
+        base_url = get_cashfree_api_url()
         headers = {
             "Content-Type": "application/json",
             "x-client-id": CASHFREE_PRODUCTION_APP_ID,
             "x-client-secret": CASHFREE_PRODUCTION_SECRET_KEY,
-            "x-api-version": CASHFREE_API_VERSION
+            "x-api-version": CASHFREE_API_VERSION,
         }
         
         async with httpx.AsyncClient(timeout=30.0) as http_client:
