@@ -1242,6 +1242,7 @@ async def cashfree_orders_webhook(request: Request):
         # Verify signature. If a secret IS configured, signature MUST match
         # (anti-spoofing). If no secret is configured we skip verification
         # so dev / first-time setup still works, with a loud warning.
+        signature_valid = False
         if webhook_secret:
             if not signature or not timestamp:
                 logger.warning("Cashfree webhook missing signature/timestamp headers")
@@ -1253,7 +1254,8 @@ async def cashfree_orders_webhook(request: Request):
                 })
                 raise HTTPException(status_code=401, detail="Missing webhook signature")
 
-            if not verify_webhook_signature(timestamp, raw_body, signature, webhook_secret):
+            signature_valid = verify_webhook_signature(timestamp, raw_body, signature, webhook_secret)
+            if not signature_valid:
                 logger.warning(
                     "Invalid Cashfree webhook signature from %s",
                     request.client.host if request.client else "unknown",
