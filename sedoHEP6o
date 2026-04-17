@@ -35,12 +35,12 @@ outputType = "webview"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "bash -c 'set -e; MONGO_URL=mongodb://127.0.0.1:27017 DB_NAME=asr_dev USE_IN_MEMORY_MONGO=true CORS_ORIGINS=\"*\" PYTHONPATH=backend python -m uvicorn server:app --app-dir backend --host 127.0.0.1 --port 8000 --no-server-header --proxy-headers --forwarded-allow-ips=\"*\" & backend_pid=$!; trap \"kill $backend_pid 2>/dev/null || true\" EXIT INT TERM; cd frontend; REACT_APP_BACKEND_URL= REACT_APP_BACKEND_PROXY=http://127.0.0.1:8000 npm start'"
+args = "bash -c 'set -e; MONGO_URL=mongodb://127.0.0.1:27017 DB_NAME=asr_dev USE_IN_MEMORY_MONGO=true CORS_ORIGINS=\"*\" PYTHONPATH=backend python -m uvicorn server:app --app-dir backend --host 127.0.0.1 --port 8000 --no-server-header & backend_pid=$!; trap \"kill $backend_pid 2>/dev/null || true\" EXIT INT TERM; cd frontend; REACT_APP_BACKEND_URL= REACT_APP_BACKEND_PROXY=http://127.0.0.1:8000 npm start'"
 waitForPort = 5000
 
 [deployment]
 deploymentTarget = "autoscale"
-run = ["bash", "-c", "export MONGO_URL=\"${MONGO_URL:-mongodb://127.0.0.1:27017}\" DB_NAME=\"${DB_NAME:-asr_dev}\" USE_IN_MEMORY_MONGO=\"${USE_IN_MEMORY_MONGO:-true}\" CORS_ORIGINS=\"${CORS_ORIGINS:-*}\" PYTHONPATH=backend; python -m uvicorn server:app --app-dir backend --host 0.0.0.0 --port \"${PORT:-5000}\""]
+run = ["bash", "-c", "export MONGO_URL=\"${MONGO_URL:-mongodb://127.0.0.1:27017}\" DB_NAME=\"${DB_NAME:-asr_dev}\" USE_IN_MEMORY_MONGO=\"${USE_IN_MEMORY_MONGO:-true}\" CORS_ORIGINS=\"${CORS_ORIGINS:-*}\" PYTHONPATH=backend; python -m uvicorn server:app --app-dir backend --host 0.0.0.0 --port \"${PORT:-5000}\" --no-server-header"]
 build = ["bash", "-c", "cd frontend && npm install --no-audit --no-fund && npm run build"]
 
 [userenv]

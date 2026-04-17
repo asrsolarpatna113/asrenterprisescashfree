@@ -64,3 +64,45 @@ ASR Enterprises is a full-stack web application with a Create React App frontend
 - XSS in invoice fixed (every field run through `html.escape`).
 - Admin-alert idempotency fixed via atomic claim + sparse unique index.
 - Retry loop no longer drops text-fallback rows that have order context.
+
+---
+
+## 2026-04-17 — Production Security Hardening
+
+### Headers (verified live in `/api/*` responses)
+| Header | Value |
+|---|---|
+| Strict-Transport-Security | max-age=31536000; includeSubDomains; preload |
+| Content-Security-Policy | locked to Cashfree, MSG91, Google (no Razorpay leftovers); `frame-ancestors 'none'`, `object-src 'none'`, `base-uri 'self'`, `upgrade-insecure-requests` |
+| X-Frame-Options | DENY |
+| X-Content-Type-Options | nosniff |
+| Referrer-Policy | strict-origin-when-cross-origin |
+| Permissions-Policy | geolocation=(), microphone=(), camera=() |
+| Cross-Origin-Opener/Resource-Policy | same-origin / same-site |
+| Server / X-Powered-By | **stripped** (uvicorn `--no-server-header` + middleware del) |
+
+### Redirect / Transport
+- `FORCE_HTTPS` env (defaults true in production) → real `RedirectResponse(301)` for any `X-Forwarded-Proto: http`. Skips `/api/health/live` for healthcheck-friendliness.
+- `CANONICAL_HOST` env (e.g. `www.asrenterprises.in`) → 308 redirect for any non-API GET coming in on a different host. API + webhook paths are never redirected so payment provider POST bodies aren't lost.
+
+### Open-redirect protection (Cashfree create-order)
+- `origin_url` from the client is now host-checked against `ALLOWED_REDIRECT_HOSTS` (env, defaults to `asrenterprises.in,www.asrenterprises.in`; `*.replit.dev` for preview). Anything else falls back silently to `ASR_WEBSITE` and is logged. Verified: `https://evil.example.com` is rejected, `https://www.asrenterprises.in` is accepted.
+
+### Existing controls (re-verified)
+- Cashfree webhook HMAC-SHA256 signature verification + replay protection + idempotent processing.
+- Rate limiting on auth (5/min), payment (10/min), OTP (5/min), admin (30/min) with IP block after 10 failed attempts.
+- Input sanitization + suspicious-pattern auto-blocking (XSS, SQLi, NoSQL operators, path traversal).
+- 10 MB request body cap; 50 MB upload cap; CORS env-driven and fail-fast against `*` in production.
+- Mongo unique indexes for orders, staff, admin alerts; sparse indexes on emails / payment_id.
+- Secrets fail-fast at startup if missing in production; never logged (mask helpers in `config.py`).
+- HTML-escaping in invoice rendering (verified blocks `<script>` payload).
+
+### Env vars added
+- `FORCE_HTTPS` (true/false) — defaults true in prod, false in dev.
+- `CANONICAL_HOST` — set to `www.asrenterprises.in` in production deploy.
+- `ALLOWED_REDIRECT_HOSTS` — comma-separated allowlist for Cashfree `origin_url`.
+
+### Post-architect-review hardening (2026-04-17 round 2)
+- **CSP completed** — added the third-party scripts the React app actually loads (`assets.emergent.sh`, `connect.facebook.net`, `us.i.posthog.com` + `*.i.posthog.com`, `www.recaptcha.net`) to `script-src`/`connect-src`/`frame-src`, so production CSP no longer breaks PostHog analytics, Facebook Pixel, Emergent debug tooling, or Google reCAPTCHA xhr.
+- **Open-redirect tightened** — `origin_url` validator now: HTTPS-only in production (no http downgrade), strict allowlist only (`*.replit.dev` fallback removed in production, kept in dev for preview), IDN/punycode-normalized host comparison (Cyrillic look-alikes blocked: `www.аsrenterprises.in` → rejected as `www.xn--srenterprises-v1k.in`), and rebuilds URL from sanitized `scheme + hostname` only (drops userinfo and arbitrary ports).
+- **Canonical-host redirect skip-list** — extended from `/api/` to `/api/`, `/webhook`, `/cashfree` so Meta webhook verification GETs and Cashfree return URLs remain on whatever host they were called with.

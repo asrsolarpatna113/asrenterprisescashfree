@@ -1004,8 +1004,40 @@ async def _create_cashfree_order_impl(payload: CreateOrderRequest):
         # SECURITY: Mask phone number in logs
         masked_phone = f"****{customer_phone[-4:]}"
         
-        # Determine base website URL - use origin_url if provided, else default to production
-        website_base = payload.origin_url or ASR_WEBSITE
+        # Determine base website URL — open-redirect protection: only accept
+        # `origin_url` whose host is in the configured allowlist. Anything else
+        # silently falls back to the production site to prevent attackers from
+        # crafting orders that redirect victims to an evil site post-payment.
+        website_base = ASR_WEBSITE
+        if payload.origin_url:
+            try:
+                from urllib.parse import urlparse
+                import config as _cfg
+                parsed = urlparse(payload.origin_url)
+                host = (parsed.hostname or "").lower()
+                # Normalize IDN/punycode so visually-similar Unicode hosts can't
+                # bypass the allowlist (e.g. "аsrenterprises.in" with Cyrillic 'а').
+                try:
+                    host = host.encode("idna").decode("ascii")
+                except Exception:
+                    pass
+                # Production: HTTPS only, strict host allowlist.
+                # Dev/preview: allow http + *.replit.dev so the workflow preview works.
+                allowed_scheme = ("https",) if _cfg.IS_PRODUCTION else ("http", "https")
+                allowed = (
+                    host in _cfg.ALLOWED_REDIRECT_HOSTS
+                    or (not _cfg.IS_PRODUCTION and host.endswith(".replit.dev"))
+                )
+                if parsed.scheme in allowed_scheme and host and allowed:
+                    # Rebuild from sanitized parts only — drop userinfo/port/etc.
+                    website_base = f"{parsed.scheme}://{host}"
+                else:
+                    logger.warning(
+                        f"Rejected origin_url host '{host}' scheme='{parsed.scheme}' "
+                        f"— not in allowlist (production={_cfg.IS_PRODUCTION}); using ASR_WEBSITE."
+                    )
+            except Exception as _e:
+                logger.warning(f"Bad origin_url ({_e}); using ASR_WEBSITE.")
         logger.info(f"Using website base URL: {website_base}")
         
         # Determine return URL

@@ -217,7 +217,40 @@ SECURITY_HEADERS = {
     "X-Frame-Options": "DENY",
     "X-XSS-Protection": "1; mode=block",
     "Strict-Transport-Security": "max-age=31536000; includeSubDomains; preload",
-    "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.google.com https://www.gstatic.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data: https:; frame-src https://www.google.com https://www.gstatic.com; connect-src 'self' https:;",
+    # CSP locked down to *actually used* third parties:
+    #   - Cashfree (payment checkout SDK + redirects)
+    #   - MSG91 (OTP widget)
+    #   - Google (reCAPTCHA / Maps embeds + reCAPTCHA xhr)
+    #   - Emergent (frontend tooling scripts loaded from index.html)
+    #   - Facebook Pixel (fbevents + tr noscript pixel)
+    #   - PostHog (analytics — us.i.posthog.com + dynamic *-assets subdomains)
+    # Frame-ancestors 'none' equivalent to X-Frame-Options: DENY.
+    # 'unsafe-inline' is required because index.html ships large inline init
+    # scripts; 'unsafe-eval' kept for now because some payment SDKs use it.
+    # TODO: migrate to nonce-based CSP and drop unsafe-eval.
+    "Content-Security-Policy": (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' "
+            "https://sdk.cashfree.com https://*.cashfree.com "
+            "https://verify.msg91.com https://control.msg91.com "
+            "https://www.google.com https://www.gstatic.com https://www.recaptcha.net "
+            "https://assets.emergent.sh "
+            "https://connect.facebook.net "
+            "https://us.i.posthog.com https://*.i.posthog.com; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' data: https://fonts.gstatic.com; "
+        "img-src 'self' data: blob: https:; "
+        "frame-src 'self' https://sdk.cashfree.com https://*.cashfree.com "
+            "https://verify.msg91.com https://www.google.com https://www.recaptcha.net "
+            "https://www.facebook.com; "
+        "connect-src 'self' https://*.cashfree.com https://api.msg91.com "
+            "https://control.msg91.com https://graph.facebook.com "
+            "https://www.google.com https://www.gstatic.com https://www.recaptcha.net "
+            "https://us.i.posthog.com https://*.i.posthog.com "
+            "https://www.facebook.com https://connect.facebook.net; "
+        "object-src 'none'; base-uri 'self'; form-action 'self' https://*.cashfree.com; "
+        "frame-ancestors 'none'; upgrade-insecure-requests"
+    ),
     "Referrer-Policy": "strict-origin-when-cross-origin",
     "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
     "X-Permitted-Cross-Domain-Policies": "none",
@@ -298,14 +331,28 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         client_ip = get_client_ip(request)
         path = request.url.path
         
-        # HTTPS Force - redirect HTTP to HTTPS
-        forwarded_proto = request.headers.get("X-Forwarded-Proto", "https")
-        if forwarded_proto == "http" and not path.startswith("/api/health"):
-            https_url = str(request.url).replace("http://", "https://", 1)
-            return JSONResponse(
-                status_code=301,
-                headers={"Location": https_url}
-            )
+        # HTTPS Force - redirect HTTP to HTTPS (production only / when enabled).
+        # Use a real RedirectResponse — JSONResponse with Location does NOT redirect.
+        from fastapi.responses import RedirectResponse
+        if app_config.FORCE_HTTPS and not path.startswith("/api/health"):
+            forwarded_proto = request.headers.get("X-Forwarded-Proto", "https").lower()
+            if forwarded_proto == "http":
+                https_url = str(request.url).replace("http://", "https://", 1)
+                return RedirectResponse(url=https_url, status_code=301)
+
+        # Canonical-host redirect (e.g. asrenterprises.in -> www.asrenterprises.in).
+        # Skip for API + webhook paths so payment / Meta providers' verification
+        # GETs and POST bodies are preserved unchanged.
+        _NEVER_REDIRECT_PREFIXES = ("/api/", "/webhook", "/cashfree")
+        if (
+            app_config.CANONICAL_HOST
+            and request.method == "GET"
+            and not any(path.startswith(p) for p in _NEVER_REDIRECT_PREFIXES)
+        ):
+            host_header = (request.headers.get("host") or "").split(":")[0].lower()
+            if host_header and host_header != app_config.CANONICAL_HOST.lower():
+                target = request.url.replace(netloc=app_config.CANONICAL_HOST)
+                return RedirectResponse(url=str(target), status_code=308)
         
         # Check if IP is blocked
         if client_ip in blocked_ips:
@@ -350,7 +397,12 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         # Add security headers
         for header, value in SECURITY_HEADERS.items():
             response.headers[header] = value
-        
+
+        # Strip server-identity headers that leak stack info (ASVS V14.4.1).
+        for h in ("Server", "X-Powered-By"):
+            if h in response.headers:
+                del response.headers[h]
+
         return response
 
 # MongoDB connection

@@ -41,6 +41,24 @@ DEBUG: bool = (not IS_PRODUCTION) and _get("DEBUG", "false").lower() in {"1", "t
 _raw_cors = _get("CORS_ORIGINS", "*")
 CORS_ORIGINS: List[str] = [o.strip() for o in _raw_cors.split(",") if o.strip()]
 
+# ---------- HTTPS / Canonical host ----------
+# When set, requests to other hosts get 308-redirected to this one.
+# Example: CANONICAL_HOST=www.asrenterprises.in
+CANONICAL_HOST: str = _get("CANONICAL_HOST", "")
+# When true (default in production), HTTP requests are 301-redirected to HTTPS.
+FORCE_HTTPS: bool = _get(
+    "FORCE_HTTPS", "true" if ENVIRONMENT in {"production", "prod"} else "false"
+).lower() in {"1", "true", "yes"}
+# Hostnames that may be used as `origin_url` when creating Cashfree orders.
+# Prevents open-redirect via attacker-supplied return URL.
+_raw_redirect = _get(
+    "ALLOWED_REDIRECT_HOSTS",
+    "asrenterprises.in,www.asrenterprises.in",
+)
+ALLOWED_REDIRECT_HOSTS: List[str] = [
+    h.strip().lower() for h in _raw_redirect.split(",") if h.strip()
+]
+
 # ---------- Database ----------
 MONGO_URL: str = _get("MONGO_URL", "mongodb://127.0.0.1:27017")
 DB_NAME: str = _get("DB_NAME", "asr_dev")
