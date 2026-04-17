@@ -79,13 +79,24 @@ from routes.cashfree_orders import router as cashfree_orders_router
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
+# Central config + fail-fast secret validation
+import config as app_config
+from config import mask_phone as _mask_phone, mask_secret as _mask_secret
+
 # Create uploads directory
 UPLOADS_DIR = ROOT_DIR / "uploads"
 UPLOADS_DIR.mkdir(exist_ok=True)
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure structured logging (level depends on environment / DEBUG flag)
+_LOG_LEVEL = logging.DEBUG if app_config.DEBUG else logging.INFO
+logging.basicConfig(
+    level=_LOG_LEVEL,
+    format="%(asctime)s %(levelname)s %(name)s :: %(message)s",
+)
 logger = logging.getLogger(__name__)
+
+# Crash early in production if any critical secret is missing.
+app_config.validate_or_exit()
 
 # ==================== EMAIL CONFIGURATION ====================
 RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '')
@@ -6725,9 +6736,14 @@ def _require_msg91() -> None:
             detail="Missing environment configuration: MSG91_AUTH_KEY",
         )
 
-@api_router.post("/otp/send")
-async def send_otp(request: Request, data: Dict[str, Any]):
-    """Send OTP to mobile number via MSG91 backend API"""
+async def _send_otp_impl(data: Dict[str, Any]):
+    """Core OTP send logic (un-decorated).
+
+    Used by the public ``/otp/send`` route AND by other routes that need
+    to trigger an OTP internally (resend, customer login, solar advisor
+    login). Keeping this separate prevents double-counting against the
+    SlowAPI rate-limit bucket on nested calls.
+    """
     _require_msg91()
     mobile = data.get("mobile", "").replace(" ", "").replace("+", "")
     if not mobile:
@@ -6870,7 +6886,15 @@ async def send_otp(request: Request, data: Dict[str, Any]):
         }
 
 
+@api_router.post("/otp/send")
+@limiter.limit(RATE_LIMIT_AUTH)
+async def send_otp(request: Request, data: Dict[str, Any]):
+    """Public OTP send endpoint (rate-limited)."""
+    return await _send_otp_impl(data)
+
+
 @api_router.post("/otp/verify")
+@limiter.limit(RATE_LIMIT_AUTH)
 async def verify_otp(request: Request, data: Dict[str, Any]):
     """Verify OTP against stored value"""
     mobile = data.get("mobile", "").replace(" ", "").replace("+", "")
@@ -6940,14 +6964,16 @@ async def verify_otp(request: Request, data: Dict[str, Any]):
 
 
 @api_router.post("/otp/resend")
+@limiter.limit(RATE_LIMIT_SENSITIVE)
 async def resend_otp(request: Request, data: Dict[str, Any]):
     """Resend OTP to mobile number"""
+    _require_msg91()
     mobile = data.get("mobile", "").replace(" ", "").replace("+", "")
     if not mobile:
         raise HTTPException(status_code=400, detail="Mobile number is required")
     
     # Reuse send logic
-    return await send_otp(request, {"mobile": mobile})
+    return await _send_otp_impl({"mobile": mobile})
 
 
 # =============================================
@@ -11384,7 +11410,7 @@ async def solar_advisor_login_otp(request: Request, data: Dict[str, Any]):
     err = _advisor_status_ok(advisor)
     if err:
         raise HTTPException(status_code=403, detail=err)
-    return await send_otp(request, {"mobile": cleaned})
+    return await _send_otp_impl({"mobile": cleaned})
 
 @api_router.post("/solar-advisor/verify-otp")
 async def solar_advisor_verify_otp(request: Request, data: Dict[str, Any]):
@@ -12449,7 +12475,7 @@ async def customer_send_otp(request: Request, data: Dict[str, Any]):
     customer = await db.customers.find_one({"mobile": mobile_clean}, {"_id": 0, "name": 1})
     if not customer:
         raise HTTPException(status_code=404, detail="Mobile number not registered. Please contact ASR Enterprises to register.")
-    return await send_otp(request, {"mobile": mobile_clean})
+    return await _send_otp_impl({"mobile": mobile_clean})
 
 @api_router.post("/customer/verify-otp")
 async def customer_verify_otp(request: Request, data: Dict[str, Any]):
@@ -12507,15 +12533,27 @@ api_router.include_router(cashfree_orders_router)
 
 app.include_router(api_router)
 
-# CORS configuration with security
-cors_origins = os.environ.get('CORS_ORIGINS', '*').split(',')
+# CORS configuration with security (env-driven; strict in production)
+cors_origins = list(app_config.CORS_ORIGINS) or ["*"]
+if app_config.IS_PRODUCTION and (cors_origins == ["*"] or "*" in cors_origins):
+    logger.critical(
+        "FATAL: CORS_ORIGINS must list explicit domains in production "
+        "(wildcard '*' is not allowed). Set CORS_ORIGINS=https://yourdomain.com"
+    )
+    raise SystemExit(1)
+# allow_credentials cannot be combined with wildcard origin per CORS spec
+_allow_credentials = cors_origins != ["*"]
 app.add_middleware(
-    CORSMiddleware, 
-    allow_credentials=True, 
-    allow_origins=cors_origins, 
+    CORSMiddleware,
+    allow_credentials=_allow_credentials,
+    allow_origins=cors_origins,
     allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
-    expose_headers=["X-Request-ID"]
+    expose_headers=["X-Request-ID"],
+)
+logger.info(
+    "CORS configured: origins=%s, credentials=%s",
+    cors_origins, _allow_credentials,
 )
 
 FRONTEND_BUILD_DIR = ROOT_DIR.parent / "frontend" / "build"

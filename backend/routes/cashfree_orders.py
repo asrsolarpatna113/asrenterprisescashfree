@@ -14,6 +14,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Optional
 from fastapi import APIRouter, HTTPException, Request, Query
+from security import limiter, RATE_LIMIT_PAYMENT, RATE_LIMIT_SENSITIVE
 from pydantic import BaseModel, Field
 from db_client import AsyncIOMotorClient
 from dotenv import load_dotenv
@@ -800,9 +801,14 @@ async def get_payment_config():
                    else "Missing CASHFREE_API_KEY / CASHFREE_SECRET_KEY",
     }
 
-@router.post("/create-order")
-async def create_cashfree_order(request: CreateOrderRequest):
-    """Create a new Cashfree order for hosted checkout (env-only credentials)."""
+async def _create_cashfree_order_impl(payload: CreateOrderRequest):
+    """Shared Cashfree order creation logic.
+
+    This is the un-decorated implementation so it can be called both from
+    the HTTP endpoint (which is rate-limited) and from internal helpers
+    like ``/website/create-order`` without double-counting against the
+    payment rate-limit bucket.
+    """
     try:
         _require_cashfree_creds()
         base_url = get_cashfree_api_url()
@@ -821,7 +827,7 @@ async def create_cashfree_order(request: CreateOrderRequest):
         order_id = generate_order_id()
         
         # Clean phone
-        customer_phone = clean_phone_number(request.customer_phone)
+        customer_phone = clean_phone_number(payload.customer_phone)
         if not customer_phone or len(customer_phone) != 10:
             raise HTTPException(status_code=400, detail="Invalid phone number. Please provide 10-digit mobile number.")
         
@@ -829,35 +835,35 @@ async def create_cashfree_order(request: CreateOrderRequest):
         masked_phone = f"****{customer_phone[-4:]}"
         
         # Determine base website URL - use origin_url if provided, else default to production
-        website_base = request.origin_url or ASR_WEBSITE
+        website_base = payload.origin_url or ASR_WEBSITE
         logger.info(f"Using website base URL: {website_base}")
         
         # Determine return URL
-        return_url = request.return_url or f"{website_base}/payment/status?order_id={order_id}"
+        return_url = payload.return_url or f"{website_base}/payment/status?order_id={order_id}"
         
         # Create Cashfree Order payload
         order_payload = {
             "order_id": order_id,
-            "order_amount": round(request.amount, 2),
+            "order_amount": round(payload.amount, 2),
             "order_currency": "INR",
             "customer_details": {
                 "customer_id": f"CUST_{customer_phone}",
                 "customer_phone": customer_phone,
-                "customer_name": request.customer_name[:100] if request.customer_name else "Customer"
+                "customer_name": payload.customer_name[:100] if payload.customer_name else "Customer"
             },
             "order_meta": {
                 "return_url": return_url,
                 "notify_url": f"{ASR_WEBSITE}/api/cashfree/webhook"  # Webhook always goes to production
             },
-            "order_note": f"{request.purpose[:100]} - {request.payment_type}"
+            "order_note": f"{payload.purpose[:100]} - {payload.payment_type}"
         }
         
         # Add email if provided
-        if request.customer_email:
-            order_payload["customer_details"]["customer_email"] = request.customer_email
+        if payload.customer_email:
+            order_payload["customer_details"]["customer_email"] = payload.customer_email
         
         # SECURITY: Log order creation with masked customer data
-        logger.info(f"Creating Cashfree order: {order_id}, amount: {request.amount}, phone: {masked_phone}")
+        logger.info(f"Creating Cashfree order: {order_id}, amount: {payload.amount}, phone: {masked_phone}")
         logger.info(f"Cashfree API URL: {base_url}/orders")
         
         async with httpx.AsyncClient(timeout=30.0) as http_client:
@@ -930,17 +936,17 @@ async def create_cashfree_order(request: CreateOrderRequest):
                 "payment_session_id": payment_session_id,
                 "payment_url": payment_url,
                 "direct_cashfree_url": direct_payment_url,  # Backup - requires S2S
-                "lead_id": request.lead_id,
-                "customer_name": request.customer_name,
+                "lead_id": payload.lead_id,
+                "customer_name": payload.customer_name,
                 "customer_phone": customer_phone,
-                "customer_email": request.customer_email,
-                "amount": request.amount,
-                "payment_type": request.payment_type,
-                "purpose": request.purpose,
-                "notes": request.notes,
+                "customer_email": payload.customer_email,
+                "amount": payload.amount,
+                "payment_type": payload.payment_type,
+                "purpose": payload.purpose,
+                "notes": payload.notes,
                 "status": "active",
-                "source": "crm" if request.lead_id else "website",
-                "created_by": request.created_by_staff_id,
+                "source": "crm" if payload.lead_id else "website",
+                "created_by": payload.created_by_staff_id,
                 "return_url": return_url,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "cashfree_response": response_data
@@ -956,13 +962,13 @@ async def create_cashfree_order(request: CreateOrderRequest):
             
             # Send via WhatsApp if requested
             whatsapp_sent = False
-            if request.send_via_whatsapp:
+            if payload.send_via_whatsapp:
                 whatsapp_sent = await send_payment_whatsapp(
                     customer_phone,
-                    request.customer_name,
-                    request.amount,
+                    payload.customer_name,
+                    payload.amount,
                     payment_url,
-                    request.purpose,
+                    payload.purpose,
                     "payment_request"
                 )
                 
@@ -988,7 +994,7 @@ async def create_cashfree_order(request: CreateOrderRequest):
                 "checkout_url": checkout_url,  # Our custom checkout page
                 "payment_session_id": payment_session_id,  # CRITICAL: This must be the raw session ID
                 "payment_link": payment_url,  # Alias for compatibility
-                "amount": request.amount,
+                "amount": payload.amount,
                 "status": order_status,
                 "whatsapp_sent": whatsapp_sent,
                 "return_url": return_url,
@@ -1008,8 +1014,16 @@ async def create_cashfree_order(request: CreateOrderRequest):
         logger.error(f"Error creating Cashfree order: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to create order: {str(e)}")
 
+@router.post("/create-order")
+@limiter.limit(RATE_LIMIT_PAYMENT)
+async def create_cashfree_order(request: Request, payload: CreateOrderRequest):
+    """Create a new Cashfree order for hosted checkout (env-only credentials)."""
+    return await _create_cashfree_order_impl(payload)
+
+
 @router.post("/website/create-order")
-async def create_website_order(request: WebsiteOrderRequest):
+@limiter.limit(RATE_LIMIT_PAYMENT)
+async def create_website_order(request: Request, payload: WebsiteOrderRequest):
     """Create order from website - auto-creates lead - USES HARDCODED PRODUCTION CREDENTIALS"""
     # Always active - using hardcoded credentials
     logger.info("Website order creation using HARDCODED PRODUCTION credentials")
@@ -1017,34 +1031,34 @@ async def create_website_order(request: WebsiteOrderRequest):
     try:
         # Create/find lead
         lead_id = await create_lead_from_payment({
-            "customer_name": request.customer_name,
-            "customer_phone": request.customer_phone,
-            "customer_email": request.customer_email,
-            "address": request.address,
-            "district": request.district,
-            "payment_type": request.payment_type
+            "customer_name": payload.customer_name,
+            "customer_phone": payload.customer_phone,
+            "customer_email": payload.customer_email,
+            "address": payload.address,
+            "district": payload.district,
+            "payment_type": payload.payment_type
         })
         
         # Get purpose label
-        purpose = PAYMENT_TYPES.get(request.payment_type, "Solar Service Payment")
-        if request.notes:
-            purpose = f"{purpose} - {request.notes}"
+        purpose = PAYMENT_TYPES.get(payload.payment_type, "Solar Service Payment")
+        if payload.notes:
+            purpose = f"{purpose} - {payload.notes}"
         
         # Create order
         order_request = CreateOrderRequest(
             lead_id=lead_id,
-            customer_name=request.customer_name,
-            customer_phone=request.customer_phone,
-            customer_email=request.customer_email,
-            amount=request.amount,
-            payment_type=request.payment_type,
+            customer_name=payload.customer_name,
+            customer_phone=payload.customer_phone,
+            customer_email=payload.customer_email,
+            amount=payload.amount,
+            payment_type=payload.payment_type,
             purpose=purpose,
-            notes=request.notes,
+            notes=payload.notes,
             send_via_whatsapp=False,  # Will be sent via webhook on success
-            origin_url=request.origin_url  # Pass through for same-origin checkout
+            origin_url=payload.origin_url  # Pass through for same-origin checkout
         )
         
-        result = await create_cashfree_order(order_request)
+        result = await _create_cashfree_order_impl(order_request)
         result["lead_id"] = lead_id
         result["support_phone"] = ASR_DISPLAY_PHONE
         result["support_email"] = ASR_SUPPORT_EMAIL
