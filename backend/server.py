@@ -543,6 +543,17 @@ async def startup_event():
         asyncio.create_task(periodic_snapshot(client, os.environ['DB_NAME'], interval=15))
     except Exception as e:
         logger.warning(f"periodic snapshot task not started: {e}")
+
+    # Start Cashfree reconciliation loop — self-healing safety net that polls
+    # Cashfree every 5 minutes for any active/pending order whose webhook may
+    # have been missed/blocked, and runs the same paid-side-effects (CRM
+    # update, service booking, lead stage, WhatsApp confirmation).
+    try:
+        from routes.cashfree_orders import cashfree_reconcile_loop
+        asyncio.create_task(cashfree_reconcile_loop(interval_seconds=300))
+        logger.info("Cashfree reconciliation loop started (every 5 minutes)")
+    except Exception as e:
+        logger.warning(f"Cashfree reconciliation loop not started: {e}")
     
     # ==================== OWNER ACCOUNT INITIALIZATION ====================
     # Ensure owner account exists with full privileges — always runs on startup

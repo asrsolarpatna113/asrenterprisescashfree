@@ -129,24 +129,45 @@ def generate_link_id() -> str:
     return f"LINK{uuid.uuid4().hex[:12].upper()}"
 
 async def get_cashfree_settings() -> Optional[Dict]:
-    """Get Cashfree API settings from database"""
-    settings = await db.cashfree_settings.find_one({}, {"_id": 0})
-    if not settings:
-        # Try environment variables as fallback
-        app_id = os.environ.get("CASHFREE_APP_ID", "")
-        secret_key = os.environ.get("CASHFREE_SECRET_KEY", "")
-        env_mode = os.environ.get("CASHFREE_ENV", "PRODUCTION").upper()
-        sandbox_var = os.environ.get("CASHFREE_SANDBOX", "false").lower()
-        if app_id and secret_key:
-            is_sandbox = sandbox_var == "true" or env_mode == "SANDBOX"
-            return {
-                "app_id": app_id,
-                "secret_key": secret_key,
-                "webhook_secret": os.environ.get("CASHFREE_WEBHOOK_SECRET", ""),
-                "is_sandbox": is_sandbox,
-                "is_active": True
-            }
-    return settings
+    """Get Cashfree API settings, merging env vars over any DB-stored values.
+
+    Env always takes precedence over a DB row that has empty/missing fields,
+    so a stale empty `cashfree_settings` document can never silently
+    "disconnect" a properly env-configured deployment. This is the same
+    self-healing pattern used by `whatsapp.get_whatsapp_settings()`.
+    """
+    db_settings = await db.cashfree_settings.find_one({}, {"_id": 0}) or {}
+
+    # Env candidates — accept both naming conventions used across the codebase.
+    env_app_id = (
+        os.environ.get("CASHFREE_APP_ID", "")
+        or os.environ.get("CASHFREE_API_KEY", "")
+    ).strip()
+    env_secret = os.environ.get("CASHFREE_SECRET_KEY", "").strip()
+    env_webhook = os.environ.get("CASHFREE_WEBHOOK_SECRET", "").strip()
+    env_mode = os.environ.get("CASHFREE_ENV", "PRODUCTION").upper()
+    sandbox_flag = (
+        os.environ.get("CASHFREE_IS_SANDBOX", "")
+        or os.environ.get("CASHFREE_SANDBOX", "")
+        or ""
+    ).lower() == "true" or env_mode == "SANDBOX"
+
+    # Env wins for credentials (canonical source of truth in production).
+    # DB wins for user-controlled flags like is_sandbox / is_active.
+    merged = {
+        "app_id": env_app_id or db_settings.get("app_id", ""),
+        "secret_key": env_secret or db_settings.get("secret_key", ""),
+        "webhook_secret": env_webhook or db_settings.get("webhook_secret", ""),
+        "is_sandbox": db_settings.get("is_sandbox", sandbox_flag),
+        "is_active": db_settings.get("is_active", True),
+    }
+    # Preserve any extra DB metadata (updated_at, etc.)
+    for k, v in db_settings.items():
+        merged.setdefault(k, v)
+
+    if not merged["app_id"] or not merged["secret_key"]:
+        return None
+    return merged
 
 def get_cashfree_base_url(is_sandbox: bool = False) -> str:
     """Get Cashfree API base URL based on environment"""

@@ -1218,6 +1218,322 @@ async def resend_payment_whatsapp(order_id: str):
 
 # ==================== WEBHOOK HANDLER ====================
 
+# ==================== PAYMENT RECONCILIATION ====================
+# Reusable helpers so that BOTH the webhook and the periodic/manual
+# reconciliation flow run identical post-payment logic. This guarantees
+# every successful payment — whether observed via webhook or by polling
+# Cashfree directly — propagates to: cashfree_orders, payments,
+# solar_service_bookings, lead stage, and a WhatsApp confirmation.
+
+async def _mark_order_paid(order: Dict, payment_data: Dict, source: str = "webhook") -> Dict:
+    """Idempotently mark a cashfree order as paid and run all side effects.
+
+    Concurrency-safe: uses an atomic conditional update (status != "paid") to
+    win the transition race between the webhook and the reconciliation loop.
+    Side effects (CRM update, lead, service booking, WhatsApp confirmation)
+    run ONLY for the caller that wins the transition. A losing caller returns
+    'already_paid' immediately.
+
+    Args:
+        order:          The DB document from cashfree_orders (must have order_id).
+        payment_data:   Dict with cf_payment_id, payment_amount, payment_time,
+                        payment_method, and (optional) full payload under "payment_details".
+        source:         "webhook" or "sync" — recorded for audit.
+    Returns dict with processing summary.
+    """
+    order_id = order["order_id"]
+    received_at = datetime.now(timezone.utc).isoformat()
+
+    if order.get("status") == "paid":
+        return {"processed": True, "message": "Already paid", "order_id": order_id}
+
+    cf_payment_id = payment_data.get("cf_payment_id", "")
+    payment_amount = payment_data.get("payment_amount", order.get("amount", 0))
+    payment_time = payment_data.get("payment_time", received_at)
+    payment_method = payment_data.get("payment_method", {})
+    payment_details = payment_data.get("payment_details", payment_data)
+
+    update_data = {
+        "status": "paid",
+        "paid_at": payment_time,
+        "cf_payment_id": cf_payment_id,
+        "payment_amount_received": payment_amount,
+        "payment_method": payment_method,
+        "payment_details": payment_details,
+        "webhook_updated_at": received_at,
+        "marked_paid_via": source,
+    }
+
+    # ATOMIC: only one caller transitions the order from non-paid to paid.
+    # If status is already "paid", modified_count == 0 and we bail out without
+    # firing side effects again — this prevents double-WhatsApp / double-booking
+    # when a webhook and the reconcile loop arrive simultaneously.
+    cf_result = await db.cashfree_orders.update_one(
+        {"order_id": order_id, "status": {"$ne": "paid"}},
+        {"$set": update_data},
+    )
+    if getattr(cf_result, "modified_count", 0) == 0:
+        # Someone else won the race; do not duplicate side effects.
+        logger.info(f"[{source}] Order {order_id} already marked paid by another caller; skipping side effects.")
+        return {"processed": True, "message": "Already paid (race avoided)", "order_id": order_id}
+    # Use upsert so the CRM "Cashfree Payments" list ALWAYS has a row,
+    # even for orders that pre-date the dual-write code path.
+    await db.payments.update_one(
+        {"order_id": order_id},
+        {"$set": {**order, **update_data, "order_type": order.get("order_type", "hosted_checkout")}},
+        upsert=True,
+    )
+
+    # Update lead stage if linked
+    if order.get("lead_id"):
+        try:
+            await update_lead_after_payment(
+                order["lead_id"],
+                order.get("payment_type", "custom"),
+                payment_amount,
+                order_id,
+            )
+        except Exception as e:
+            logger.error(f"[{source}] update_lead_after_payment failed for {order_id}: {e}")
+
+    # Sync to solar_service_bookings if this is a service/booking payment
+    ptype = (order.get("payment_type", "") or "").lower()
+    notes_text = order.get("notes", "") or order.get("purpose", "") or ""
+    is_service_booking = ptype in ["booking", "service", "book_solar_service", "site_visit"] or any(
+        kw in notes_text.lower()
+        for kw in ["service", "booking", "site visit", "solar service", "site_visit"]
+    )
+    service_booking_synced = False
+    if is_service_booking:
+        try:
+            booking_number = f"SB{order_id[-8:].upper()}"
+            svc_doc = {
+                "id": order_id,
+                "booking_number": booking_number,
+                "cashfree_order_id": order_id,
+                "customer_name": order.get("customer_name", ""),
+                "customer_phone": order.get("customer_phone", ""),
+                "customer_email": order.get("customer_email", ""),
+                "address": order.get("address", order.get("notes", "")),
+                "price": float(payment_amount),
+                "payment_status": "paid",
+                "status": "confirmed",
+                "booking_type": ptype or "site_visit",
+                "notes": notes_text,
+                "cashfree_payment_id": cf_payment_id,
+                "paid_at": payment_time,
+                "created_at": order.get("created_at", received_at),
+                "updated_at": received_at,
+                "source": f"cashfree_{source}",
+            }
+            await db.solar_service_bookings.update_one(
+                {"cashfree_order_id": order_id},
+                {"$set": svc_doc},
+                upsert=True,
+            )
+            service_booking_synced = True
+            logger.info(f"[{source}] Service booking synced to CRM: {booking_number}")
+        except Exception as svc_err:
+            logger.error(f"[{source}] Service booking sync failed for {order_id}: {svc_err}")
+
+    # WhatsApp + SMS confirmations (also fires on sync, so missed-webhook
+    # customers still receive their receipt the moment we reconcile).
+    confirmations = {}
+    try:
+        # Re-read latest order so confirmations include paid status
+        fresh = await db.cashfree_orders.find_one({"order_id": order_id}, {"_id": 0}) or order
+        confirmations = await send_payment_confirmations(
+            order=fresh, order_id=order_id, amount=payment_amount
+        )
+    except Exception as e:
+        logger.error(f"[{source}] send_payment_confirmations failed for {order_id}: {e}")
+        confirmations = {"error": str(e)}
+
+    logger.info(
+        f"Payment SUCCESS via {source}: order={order_id}, amount={payment_amount}, "
+        f"service_booking={service_booking_synced}, confirmations={confirmations}"
+    )
+    return {
+        "processed": True,
+        "message": f"Payment marked as PAID via {source}",
+        "amount": payment_amount,
+        "confirmations": confirmations,
+        "service_booking_synced": service_booking_synced,
+    }
+
+
+async def _sync_order_with_cashfree(order_id: str) -> Dict:
+    """Poll Cashfree for a single order's true status and reconcile our DB.
+
+    Returns a dict with the action taken: synced, skipped, not_found, error.
+    """
+    order = await db.cashfree_orders.find_one({"order_id": order_id}, {"_id": 0})
+    if not order:
+        return {"order_id": order_id, "action": "not_found"}
+    if order.get("status") == "paid":
+        return {"order_id": order_id, "action": "already_paid"}
+
+    if not CASHFREE_PRODUCTION_APP_ID or not CASHFREE_PRODUCTION_SECRET_KEY:
+        return {"order_id": order_id, "action": "error", "error": "Cashfree env not configured"}
+
+    base_url = get_cashfree_api_url()
+    headers = {
+        "x-client-id": CASHFREE_PRODUCTION_APP_ID,
+        "x-client-secret": CASHFREE_PRODUCTION_SECRET_KEY,
+        "x-api-version": "2023-08-01",
+        "Content-Type": "application/json",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as http_client:
+            # 1. Order status
+            r = await http_client.get(f"{base_url}/orders/{order_id}", headers=headers)
+            if r.status_code == 404:
+                return {"order_id": order_id, "action": "not_found_at_cashfree"}
+            if r.status_code != 200:
+                return {
+                    "order_id": order_id,
+                    "action": "error",
+                    "error": f"Cashfree GET /orders {r.status_code}: {r.text[:200]}",
+                }
+            cf_order = r.json()
+            cf_status = (cf_order.get("order_status") or "").upper()
+
+            if cf_status == "PAID":
+                # 2. Fetch payment details
+                pr = await http_client.get(f"{base_url}/orders/{order_id}/payments", headers=headers)
+                successful_payment = {}
+                if pr.status_code == 200:
+                    payments_list = pr.json() if isinstance(pr.json(), list) else []
+                    for p in payments_list:
+                        if (p.get("payment_status") or "").upper() == "SUCCESS":
+                            successful_payment = p
+                            break
+                payment_data = {
+                    "cf_payment_id": str(successful_payment.get("cf_payment_id", "")),
+                    "payment_amount": successful_payment.get("payment_amount")
+                    or cf_order.get("order_amount")
+                    or order.get("amount", 0),
+                    "payment_time": successful_payment.get("payment_completion_time")
+                    or datetime.now(timezone.utc).isoformat(),
+                    "payment_method": successful_payment.get("payment_method", {}),
+                    "payment_details": {"order": cf_order, "payment": successful_payment},
+                }
+                result = await _mark_order_paid(order, payment_data, source="sync")
+                return {"order_id": order_id, "action": "synced_to_paid", "detail": result}
+
+            if cf_status in ("EXPIRED", "TERMINATED", "TERMINATION_REQUESTED"):
+                await db.cashfree_orders.update_one(
+                    {"order_id": order_id},
+                    {"$set": {
+                        "status": "expired" if cf_status == "EXPIRED" else "cancelled",
+                        "webhook_updated_at": datetime.now(timezone.utc).isoformat(),
+                        "cashfree_order_status": cf_status,
+                    }},
+                )
+                return {"order_id": order_id, "action": f"synced_to_{cf_status.lower()}"}
+
+            # ACTIVE / PENDING — leave as-is
+            return {"order_id": order_id, "action": "no_change", "cashfree_status": cf_status}
+    except Exception as e:
+        logger.error(f"[sync] Failed to sync order {order_id}: {e}")
+        return {"order_id": order_id, "action": "error", "error": str(e)}
+
+
+async def _sync_pending_orders(max_orders: int = 200) -> Dict:
+    """Reconcile all not-yet-paid orders against Cashfree. Self-healing."""
+    cursor = db.cashfree_orders.find(
+        {"status": {"$in": ["active", "pending", "ACTIVE", "PENDING", None]}},
+        {"_id": 0, "order_id": 1, "created_at": 1},
+    ).sort("created_at", -1).limit(max_orders)
+    orders = await cursor.to_list(length=max_orders)
+    results = {"checked": 0, "marked_paid": 0, "expired": 0, "errors": 0, "details": []}
+    for o in orders:
+        oid = o.get("order_id")
+        if not oid:
+            continue
+        results["checked"] += 1
+        r = await _sync_order_with_cashfree(oid)
+        if r.get("action") == "synced_to_paid":
+            results["marked_paid"] += 1
+        elif r.get("action", "").startswith("synced_to_"):
+            results["expired"] += 1
+        elif r.get("action") == "error":
+            results["errors"] += 1
+        results["details"].append(r)
+    return results
+
+
+def _require_admin_token(request: Request) -> None:
+    """Gate sensitive reconciliation endpoints behind an admin shared secret.
+
+    The expected token is read from `ADMIN_API_TOKEN` (preferred) or, as a
+    backwards-compatible fallback, `CASHFREE_WEBHOOK_SECRET` (which is already
+    a server-only secret on this deployment). Header name: `x-admin-token`.
+
+    If NEITHER secret is configured, we accept the request and log a warning
+    so first-time setups still work, but production deployments MUST set one.
+    """
+    expected = (
+        os.environ.get("ADMIN_API_TOKEN", "").strip()
+        or os.environ.get("CASHFREE_WEBHOOK_SECRET", "").strip()
+    )
+    if not expected:
+        logger.warning(
+            "Cashfree sync endpoint called with no ADMIN_API_TOKEN configured — "
+            "request allowed but production deployments should set this env var."
+        )
+        return
+    provided = (request.headers.get("x-admin-token") or "").strip()
+    if not provided or not hmac.compare_digest(provided, expected):
+        raise HTTPException(status_code=401, detail="Admin token required")
+
+
+@router.post("/sync/{order_id}")
+@limiter.limit(RATE_LIMIT_SENSITIVE)
+async def sync_single_order(request: Request, order_id: str):
+    """Manually reconcile a single order with Cashfree.
+
+    Auth: requires `x-admin-token` header matching `ADMIN_API_TOKEN` (or the
+    fallback `CASHFREE_WEBHOOK_SECRET`). Use to retry a payment that succeeded
+    on Cashfree but never updated in CRM (e.g. webhook was missed/blocked).
+    Idempotent — running it on an already-paid order is a no-op."""
+    _require_admin_token(request)
+    return await _sync_order_with_cashfree(order_id)
+
+
+@router.post("/sync-orders")
+@limiter.limit(RATE_LIMIT_SENSITIVE)
+async def sync_all_orders(request: Request, max_orders: int = Query(200, ge=1, le=1000)):
+    """Reconcile all active/pending orders with Cashfree.
+
+    Auth: same as `/sync/{order_id}`. Backfills CRM Cashfree Payments view,
+    Service Price/Confirmed Orders, and fires any missed WhatsApp
+    confirmations. Safe to run repeatedly."""
+    _require_admin_token(request)
+    return await _sync_pending_orders(max_orders=max_orders)
+
+
+async def cashfree_reconcile_loop(interval_seconds: int = 300):
+    """Background task: every N seconds, reconcile pending orders with Cashfree.
+
+    This is the safety net that ensures payments stay in sync even if a webhook
+    delivery is dropped, signature-rejected, or never sent at all."""
+    import asyncio as _asyncio
+    while True:
+        try:
+            await _asyncio.sleep(interval_seconds)
+            if not CASHFREE_PRODUCTION_APP_ID or not CASHFREE_PRODUCTION_SECRET_KEY:
+                continue
+            res = await _sync_pending_orders(max_orders=100)
+            if res["marked_paid"] or res["expired"] or res["errors"]:
+                logger.info(
+                    f"[cashfree-reconcile] checked={res['checked']} "
+                    f"marked_paid={res['marked_paid']} expired={res['expired']} errors={res['errors']}"
+                )
+        except Exception as e:
+            logger.error(f"[cashfree-reconcile] loop error: {e}")
+
+
 @router.post("/webhook")
 async def cashfree_orders_webhook(request: Request):
     """
@@ -1317,97 +1633,20 @@ async def cashfree_orders_webhook(request: Request):
         
         if event_type in ["PAYMENT_SUCCESS_WEBHOOK", "PAYMENT_SUCCESS"]:
             order = await db.cashfree_orders.find_one({"order_id": order_id}, {"_id": 0})
-            
-            if order:
-                if order.get("status") == "paid":
-                    processing_result = {"processed": True, "message": "Already paid"}
-                else:
-                    # Extract payment details
-                    cf_payment_id = payment_data.get("cf_payment_id", "")
-                    payment_amount = payment_data.get("payment_amount", order.get("amount", 0))
-                    payment_time = payment_data.get("payment_time", received_at)
-                    payment_method = payment_data.get("payment_method", {})
-                    
-                    # Update order
-                    update_data = {
-                        "status": "paid",
-                        "paid_at": payment_time,
-                        "cf_payment_id": cf_payment_id,
-                        "payment_amount_received": payment_amount,
-                        "payment_method": payment_method,
-                        "payment_details": data,
-                        "webhook_updated_at": received_at
-                    }
-                    
-                    await db.cashfree_orders.update_one(
-                        {"order_id": order_id},
-                        {"$set": update_data}
-                    )
-                    await db.payments.update_one(
-                        {"order_id": order_id},
-                        {"$set": update_data}
-                    )
-                    
-                    # Update lead
-                    if order.get("lead_id"):
-                        await update_lead_after_payment(
-                            order["lead_id"],
-                            order.get("payment_type", "custom"),
-                            payment_amount,
-                            order_id
-                        )
-                    
-                    # Sync to solar_service_bookings if this is a service/booking payment
-                    ptype = order.get("payment_type", "")
-                    notes_text = order.get("notes", "") or order.get("purpose", "")
-                    is_service_booking = ptype in ["booking", "service", "book_solar_service", "site_visit"] or \
-                        any(kw in notes_text.lower() for kw in ["service", "booking", "site visit", "solar service"])
-                    if is_service_booking:
-                        try:
-                            booking_number = f"SB{order_id[-8:].upper()}"
-                            svc_doc = {
-                                "id": order_id,
-                                "booking_number": booking_number,
-                                "cashfree_order_id": order_id,
-                                "customer_name": order.get("customer_name", ""),
-                                "customer_phone": order.get("customer_phone", ""),
-                                "customer_email": order.get("customer_email", ""),
-                                "address": order.get("address", order.get("notes", "")),
-                                "price": float(payment_amount),
-                                "payment_status": "paid",
-                                "status": "confirmed",
-                                "booking_type": ptype,
-                                "notes": notes_text,
-                                "cashfree_payment_id": cf_payment_id,
-                                "paid_at": payment_time,
-                                "created_at": order.get("created_at", received_at),
-                                "updated_at": received_at,
-                                "source": "cashfree_webhook"
-                            }
-                            await db.solar_service_bookings.update_one(
-                                {"cashfree_order_id": order_id},
-                                {"$set": svc_doc},
-                                upsert=True
-                            )
-                            logger.info(f"[Webhook] Service booking synced to CRM: {booking_number}")
-                        except Exception as svc_err:
-                            logger.error(f"[Webhook] Service booking sync failed: {svc_err}")
 
-                    # Send BOTH WhatsApp AND SMS confirmations
-                    confirmation_results = await send_payment_confirmations(
-                        order=order,
-                        order_id=order_id,
-                        amount=payment_amount
-                    )
-                    
-                    processing_result = {
-                        "processed": True,
-                        "message": "Payment marked as PAID",
-                        "amount": payment_amount,
-                        "confirmations": confirmation_results,
-                        "service_booking_synced": is_service_booking
-                    }
-                    logger.info(f"Payment SUCCESS: order={order_id}, amount={payment_amount}, confirmations={confirmation_results}")
+            if order:
+                # Delegate to the shared helper so webhook + sync stay identical.
+                processing_result = await _mark_order_paid(
+                    order=order,
+                    payment_data={
+                        "cf_payment_id": payment_data.get("cf_payment_id", ""),
+                        "payment_amount": payment_data.get("payment_amount", order.get("amount", 0)),
+                        "payment_time": payment_data.get("payment_time", received_at),
+                        "payment_method": payment_data.get("payment_method", {}),
+                        "payment_details": data,
+                    },
+                    source="webhook",
+                )
             else:
                 processing_result = {"processed": False, "message": "Order not found"}
         

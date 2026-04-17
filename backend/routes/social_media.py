@@ -88,9 +88,59 @@ except Exception as e:
 # ==================== HELPER FUNCTIONS ====================
 
 async def get_social_settings():
-    """Get social media settings"""
-    settings = await db.social_accounts.find_one({}, {"_id": 0})
-    return settings or {}
+    """Get social media settings, merging env vars over DB.
+
+    Env-provided Facebook page access token (`FACEBOOK_PAGE_ACCESS_TOKEN`)
+    and optional `FACEBOOK_PAGE_ID` / `INSTAGRAM_ACCOUNT_ID` are used as
+    defaults when DB fields are empty. The `*_connected` flags are then
+    DERIVED from the presence of usable credentials so a stale empty DB
+    document can never silently flip the integration to "disconnected".
+    """
+    db_settings = await db.social_accounts.find_one({}, {"_id": 0}) or {}
+
+    env_fb_token = os.environ.get("FACEBOOK_PAGE_ACCESS_TOKEN", "").strip()
+    env_fb_page_id = os.environ.get("FACEBOOK_PAGE_ID", "").strip()
+    env_ig_account_id = os.environ.get("INSTAGRAM_ACCOUNT_ID", "").strip()
+
+    # Env wins for the access token (canonical, rotatable from infra).
+    # For page/account IDs, env wins when set, else DB.
+    merged = dict(db_settings)
+    merged["facebook_access_token"] = (
+        env_fb_token or db_settings.get("facebook_access_token", "")
+    )
+    merged["facebook_page_id"] = (
+        env_fb_page_id or db_settings.get("facebook_page_id", "")
+    )
+    merged["instagram_account_id"] = (
+        env_ig_account_id or db_settings.get("instagram_account_id", "")
+    )
+
+    # Derive connection state from credential presence. Only honor an explicit
+    # DB `*_connected: False` if there is NO env-provided token (otherwise env
+    # is the source of truth and we treat the integration as connected).
+    has_fb_creds = bool(merged["facebook_access_token"] and merged["facebook_page_id"])
+    if has_fb_creds:
+        if env_fb_token:
+            merged["facebook_connected"] = True
+        else:
+            merged["facebook_connected"] = db_settings.get("facebook_connected", True)
+    else:
+        merged["facebook_connected"] = False
+
+    has_ig_creds = bool(merged["facebook_access_token"] and merged["instagram_account_id"])
+    if has_ig_creds:
+        if env_fb_token:
+            merged["instagram_connected"] = True
+        else:
+            merged["instagram_connected"] = db_settings.get("instagram_connected", True)
+    else:
+        merged["instagram_connected"] = False
+
+    # Mark the source so admin UI can show "(env)" indicator if desired
+    merged["facebook_token_source"] = (
+        "env" if env_fb_token and not db_settings.get("facebook_access_token") else "db"
+    )
+    return merged
 
 async def validate_facebook_token(access_token: str, page_id: str):
     """Validate Facebook access token, page access, and permissions"""
@@ -194,13 +244,18 @@ async def save_settings(request: Request):
     facebook_access_token = data.get("facebook_access_token", "").strip()
     instagram_account_id = data.get("instagram_account_id", "").strip()
     
-    # Get existing settings to preserve tokens if not provided
+    # Get existing settings to preserve tokens/IDs if not provided.
+    # IMPORTANT: never wipe a credential to empty — that's how the integration
+    # was silently auto-disconnecting on accidental empty saves.
     existing = await get_social_settings()
-    
-    # Use existing tokens if new ones not provided
+
     if not facebook_access_token and existing.get("facebook_access_token"):
         facebook_access_token = existing.get("facebook_access_token")
-    
+    if not facebook_page_id and existing.get("facebook_page_id"):
+        facebook_page_id = existing.get("facebook_page_id")
+    if not instagram_account_id and existing.get("instagram_account_id"):
+        instagram_account_id = existing.get("instagram_account_id")
+
     update_data = {
         "facebook_page_id": facebook_page_id,
         "facebook_access_token": facebook_access_token,
@@ -338,8 +393,13 @@ async def test_connection():
                 "connected": False,
                 "status": f"Error: {fb_result.get('error', 'Token expired or invalid')}"
             }
-            # Update settings to reflect disconnected state
-            await db.social_accounts.update_one({}, {"$set": {"facebook_connected": False}})
+            # Only flip the persisted flag when the failing token came from DB.
+            # Env-driven setups stay "connected" in the UI — the real fix for an
+            # env token is rotation, not silently disconnecting the integration.
+            if settings.get("facebook_token_source") != "env":
+                await db.social_accounts.update_one(
+                    {}, {"$set": {"facebook_connected": False}}, upsert=True
+                )
     
     # Test Instagram
     if settings.get("facebook_access_token") and settings.get("instagram_account_id"):
@@ -358,7 +418,10 @@ async def test_connection():
                 "connected": False,
                 "status": f"Error: {ig_result.get('error', 'Account invalid')}"
             }
-            await db.social_accounts.update_one({}, {"$set": {"instagram_connected": False}})
+            if settings.get("facebook_token_source") != "env":
+                await db.social_accounts.update_one(
+                    {}, {"$set": {"instagram_connected": False}}, upsert=True
+                )
     
     return results
 
