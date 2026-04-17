@@ -26,6 +26,44 @@ logger = logging.getLogger(__name__)
 _DEFAULT_SNAPSHOT_PATH = Path(__file__).resolve().parent / "data" / "mongo_snapshot.json"
 SNAPSHOT_PATH = Path(os.environ.get("MONGO_SNAPSHOT_PATH", str(_DEFAULT_SNAPSHOT_PATH)))
 
+# Staff IDs that must NEVER be auto-restored from the snapshot file.
+# These are legacy test/demo accounts that the owner has permanently deleted
+# from HR Management. Without this guard, every workflow restart re-loads the
+# snapshot and the deleted records reappear.
+_BLOCKED_STAFF_IDS = {"ASR1003", "ASR1004"}
+
+# Single shared client/db instance for the whole process. With real MongoDB
+# every connection ends up at the same server so this would not matter, but
+# in USE_IN_MEMORY mode (mongomock-motor) every `AsyncIOMotorClient(...)` call
+# spins up its OWN isolated in-memory store. That caused Cashfree payments to
+# upsert into one mongomock instance while the CRM "Cashfree Payments" page
+# read from a different one, producing the "payment succeeded but does not show
+# in CRM" bug. All route modules must call get_client()/get_db() instead of
+# constructing their own client.
+_shared_client = None
+_shared_dbs: dict = {}
+
+
+def get_client():
+    """Return the process-wide shared mongo client (lazy-initialized)."""
+    global _shared_client
+    if _shared_client is None:
+        mongo_url = os.environ.get("MONGO_URL", "mongodb://127.0.0.1:27017")
+        _shared_client = AsyncIOMotorClient(mongo_url)
+    return _shared_client
+
+
+def get_db(db_name: str = None):
+    """Return a shared database handle keyed by db_name.
+
+    Cached per-name so different callers that pass different db_name values
+    don't silently share a DB handle resolved by whoever imported first.
+    """
+    name = db_name or os.environ.get("DB_NAME", "asr_dev")
+    if name not in _shared_dbs:
+        _shared_dbs[name] = get_client()[name]
+    return _shared_dbs[name]
+
 _save_lock = asyncio.Lock()
 
 
@@ -69,11 +107,17 @@ async def load_snapshot(client, db_name: str) -> int:
     for coll_name, docs in (data or {}).items():
         if not isinstance(docs, list) or not docs:
             continue
-        # Strip Mongo internal _id (mongomock will reassign) to avoid type conflicts
+        # Strip Mongo internal _id (mongomock will reassign) to avoid type conflicts.
+        # Also drop any record whose staff_id/employee_id is in the blocked set
+        # so deleted test accounts can never be resurrected from an old snapshot.
         clean = []
         for d in docs:
             if isinstance(d, dict):
                 d.pop("_id", None)
+                if coll_name in ("hr_employees", "crm_staff_accounts"):
+                    sid = d.get("staff_id") or d.get("employee_id")
+                    if sid in _BLOCKED_STAFF_IDS:
+                        continue
                 clean.append(d)
         if clean:
             try:

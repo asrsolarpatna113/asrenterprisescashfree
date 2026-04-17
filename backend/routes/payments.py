@@ -15,7 +15,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Request, BackgroundTasks
 from pydantic import BaseModel, Field
-from db_client import AsyncIOMotorClient
+from db_client import AsyncIOMotorClient, get_db
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +24,8 @@ router = APIRouter(prefix="/payments", tags=["Payments"])
 # MongoDB connection
 MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
 DB_NAME = os.environ.get("DB_NAME", "test_database")
-client = AsyncIOMotorClient(MONGO_URL)
-db = client[DB_NAME]
+db = get_db(DB_NAME)
+client = db.client
 
 # ==================== CONSTANTS ====================
 CASHFREE_API_VERSION = "2023-08-01"

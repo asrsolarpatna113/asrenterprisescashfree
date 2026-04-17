@@ -355,8 +355,9 @@ class SecurityMiddleware(BaseHTTPMiddleware):
 
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+from db_client import get_client as _get_shared_client, get_db as _get_shared_db
+client = _get_shared_client()
+db = _get_shared_db(os.environ['DB_NAME'])
 
 # ==================== PERFORMANCE OPTIMIZATION ====================
 
@@ -606,28 +607,31 @@ async def startup_event():
     try:
         anamika_id = "ASR1002"
         anamika_name = "Anamika"
-        anamika_email = os.environ.get("ANAMIKA_EMAIL", "analnikarathod1905@gmail.com").lower()
-        anamika_phone = os.environ.get("ANAMIKA_PHONE", "9999900002")
+        # Correct credentials registered by Super Admin Abhijeet. These are used
+        # ONLY for the first-time seed — once the record exists in the DB, the
+        # values entered in HR Management are the source of truth and this seed
+        # block must NEVER overwrite them (that caused Anamika's email/phone to
+        # revert on every restart).
+        anamika_email = os.environ.get("ANAMIKA_EMAIL", "anamikarathod1905@gmail.com").lower()
+        anamika_phone = os.environ.get("ANAMIKA_PHONE", "7903434221")
         anamika_password = os.environ.get("ANAMIKA_PASSWORD", "anamika@123")
         anamika_pwd_hash = hashlib.sha256(anamika_password.encode()).hexdigest()
 
-        # HR record — upsert identity fields every startup so admin-manager
-        # access stays in sync with the source of truth (this seed block).
+        # HR record — create only if missing. Do NOT touch an existing record:
+        # the Super Admin's manual edits in HR Management must be preserved.
         hr_doc = await db.hr_employees.find_one({"employee_id": anamika_id})
-        hr_fields = {
-            "name": anamika_name,
-            "email": anamika_email,
-            "phone": anamika_phone,
-            "department": "admin",
-            "designation": "Admin Manager",
-            "role": "manager",
-            "is_active": True,
-            "status": "active",
-        }
         if not hr_doc:
             await db.hr_employees.insert_one({
                 "id": str(uuid.uuid4()),
                 "employee_id": anamika_id,
+                "name": anamika_name,
+                "email": anamika_email,
+                "phone": anamika_phone,
+                "department": "admin",
+                "designation": "Admin Manager",
+                "role": "manager",
+                "is_active": True,
+                "status": "active",
                 "employment_type": "full_time",
                 "joining_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
                 "state": "Bihar",
@@ -641,40 +645,44 @@ async def startup_event():
                 "leaves_remaining": 18,
                 "onboarding_completed": True,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                **hr_fields,
             })
             logger.info(f"✅ Seeded admin manager {anamika_name} ({anamika_id})")
         else:
-            await db.hr_employees.update_one({"employee_id": anamika_id}, {"$set": hr_fields})
+            logger.info(f"Anamika ({anamika_id}) HR record already exists — leaving Super Admin's values untouched")
 
-        # CRM staff (login) record — also upsert identity, contact and password
-        # so the staff portal email-login keeps working with the documented
-        # default credentials even if the snapshot has stale data.
+        # CRM staff (login) record — same rule: create only if missing. The
+        # only field we keep in sync on every startup is `password_hash`, and
+        # only if ANAMIKA_PASSWORD was explicitly set via env (so owner can
+        # recover access). Identity fields (email/phone/name) are owned by HR.
         staff_doc = await db.crm_staff_accounts.find_one({"staff_id": anamika_id})
-        staff_fields = {
-            "name": anamika_name,
-            "email": anamika_email,
-            "phone": anamika_phone,
-            "mobile": anamika_phone,
-            "role": "manager",
-            "department": "admin",
-            "is_active": True,
-            "otp_login_enabled": True,
-            "password_hash": anamika_pwd_hash,
-        }
         if not staff_doc:
             await db.crm_staff_accounts.insert_one({
                 "id": str(uuid.uuid4()),
                 "staff_id": anamika_id,
+                "name": anamika_name,
+                "email": anamika_email,
+                "phone": anamika_phone,
+                "mobile": anamika_phone,
+                "role": "manager",
+                "department": "admin",
+                "is_active": True,
+                "otp_login_enabled": True,
+                "password_hash": anamika_pwd_hash,
                 "leads_assigned": 0,
                 "leads_converted": 0,
                 "total_revenue": 0,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                **staff_fields,
             })
             logger.info(f"✅ Created CRM staff account for {anamika_name} ({anamika_id})")
+        elif os.environ.get("ANAMIKA_PASSWORD"):
+            # Explicit env override — allow password recovery without touching identity.
+            await db.crm_staff_accounts.update_one(
+                {"staff_id": anamika_id},
+                {"$set": {"password_hash": anamika_pwd_hash}},
+            )
+            logger.info(f"Anamika ({anamika_id}) password refreshed from ANAMIKA_PASSWORD env override")
         else:
-            await db.crm_staff_accounts.update_one({"staff_id": anamika_id}, {"$set": staff_fields})
+            logger.info(f"Anamika ({anamika_id}) staff account already exists — Super Admin's credentials preserved")
     except Exception as e:
         logger.warning(f"Anamika seed skipped: {e}")
 

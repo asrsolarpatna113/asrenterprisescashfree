@@ -24,3 +24,17 @@ ASR Enterprises is a full-stack web application with a Create React App frontend
 - Run command starts FastAPI on `0.0.0.0:${PORT:-5000}` and serves the compiled React app from `frontend/build`.
 - Frontend production dependencies were aligned for normal npm install: React 18, React DOM 18, date-fns 3, ESLint 8, AJV 8.
 - The public website theme uses a premium light solar palette with sunlit gold, solar-glass blue, emerald CTA accents, and visible solar-panel grid/array effects on the homepage hero and zero-bill section.
+## April 17, 2026 — HR / Cashfree CRM / WhatsApp Template Fixes
+
+**Fixed 7 reported issues via 3 architectural changes:**
+
+1. **Shared DB client singleton** (`db_client.py` + 5 route files + `server.py`) — Previously each route module called `AsyncIOMotorClient(MONGO_URL)` independently. Under `USE_IN_MEMORY_MONGO=true` (mongomock-motor), every call spins up its OWN isolated in-memory store, so Cashfree's `db.payments.update_one(...)` wrote into one store while the CRM "Cashfree Payments" page read from a different one. All routes now use `db_client.get_db()` which caches a single shared client. Fixes: Cashfree Payments not showing in CRM, any cross-module data invisibility.
+
+2. **Anamika (ASR1002) seed — create-only** (`server.py:610-687`) — The seed block used to `update_one(...)` on every startup, force-overwriting any edits the Super Admin made via HR Management. Now it only inserts if the record is missing. Also fixed the default email typo (`analnikarathod1905` → `anamikarathod1905`) and corrected default phone (`9999900002` → `7903434221`). `ANAMIKA_PASSWORD` env still refreshes password hash for owner recovery, nothing else.
+
+3. **Snapshot resurrection guard** (`db_client.py`) — Test staff `ASR1003` (Persistence Test) and `ASR1004` (Sales Test) were baked into `data/mongo_snapshot.json` and reappeared on every restart. Cleaned them out of the snapshot AND added `_BLOCKED_STAFF_IDS` filter inside `load_snapshot` so these IDs can never be restored even if they reappear in a future snapshot.
+
+**WhatsApp template sync hardening** (`routes/whatsapp.py:420-560`)
+- Only APPROVED templates from Meta are stored as active; any template that disappears from Meta is marked `is_active=False` and `meta_approved=False` (kept for history, but unusable).
+- On Meta API failure the endpoint now returns `502` instead of silently overwriting the admin's curated table with hard-coded `DEFAULT_TEMPLATES`.
+- Preserves the admin's `is_active` toggle on re-sync.

@@ -21,8 +21,9 @@ router = APIRouter(prefix="/whatsapp", tags=["WhatsApp"])
 # MongoDB connection
 MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
 DB_NAME = os.environ.get("DB_NAME", "test_database")
-client = AsyncIOMotorClient(MONGO_URL)
-db = client[DB_NAME]
+from db_client import get_db
+db = get_db(DB_NAME)
+client = db.client
 
 # WhatsApp API Constants
 WHATSAPP_API_VERSION = "v23.0"
@@ -132,14 +133,25 @@ async def send_whatsapp_template(
     if not cleaned_phone:
         return {"success": False, "error": f"Invalid phone number: {phone}"}
     
-    # Auto-detect language code from template if not provided
+    # Fetch template record — needed both for language_code auto-detect and
+    # for the Meta-approved / active gating below.
+    template = await db.whatsapp_templates.find_one({"template_name": template_name}, {"_id": 0})
+    if not template:
+        template = await db.whatsapp_templates.find_one({"name": template_name}, {"_id": 0})
+
+    # Enforce owner policy: WhatsApp API may only send Meta-approved, active
+    # templates. If the local record exists and has been explicitly flagged
+    # inactive or not-approved, refuse. If no local record exists we still
+    # attempt the send (backward compat for templates created/approved on
+    # Meta that have never been synced locally); Meta's own API will reject
+    # non-approved names with a clear error.
+    if template is not None:
+        if template.get("is_active") is False:
+            return {"success": False, "error": f"Template '{template_name}' is disabled locally"}
+        if template.get("meta_approved") is False:
+            return {"success": False, "error": f"Template '{template_name}' is not approved by Meta"}
+
     if not language_code:
-        # Try to find by template_name first
-        template = await db.whatsapp_templates.find_one({"template_name": template_name}, {"_id": 0})
-        if not template:
-            # Also try by name field
-            template = await db.whatsapp_templates.find_one({"name": template_name}, {"_id": 0})
-        
         language_code = template.get("language_code", "en") if template else "en"
     
     # Build request payload
@@ -447,6 +459,16 @@ async def sync_templates():
             if response.status_code == 200 and "data" in response_data:
                 templates = response_data["data"]
                 count = 0
+                # Preserve the owner's is_active toggle so Sync does not
+                # silently re-enable templates the admin disabled, and track
+                # which approved template_names are still present on Meta so
+                # we can retire (mark inactive) anything that vanished.
+                existing = {
+                    t["template_name"]: t
+                    for t in await db.whatsapp_templates.find({}, {"_id": 0}).to_list(500)
+                    if t.get("template_name")
+                }
+                approved_names = set()
                 for t in templates:
                     if t.get("status") == "APPROVED":
                         # Extract variable count from template components
@@ -487,8 +509,11 @@ async def sync_templates():
                         
                         has_variables = variable_count > 0
                         
+                        name = t.get("name")
+                        approved_names.add(name)
+                        prev = existing.get(name, {})
                         template_data = {
-                            "template_name": t.get("name"),
+                            "template_name": name,
                             "display_name": t.get("name", "").replace("_", " ").title(),
                             "language_code": t.get("language", "en"),
                             "category": t.get("category", "MARKETING"),
@@ -496,8 +521,11 @@ async def sync_templates():
                             "has_variables": has_variables,
                             "variable_count": variable_count,
                             "components": components,  # Store original components for reference
-                            "is_active": True,
-                            "synced_at": datetime.now(timezone.utc).isoformat()
+                            # Respect the admin's toggle — default to True only
+                            # when this template is brand new to our DB.
+                            "is_active": prev.get("is_active", True),
+                            "synced_at": datetime.now(timezone.utc).isoformat(),
+                            "meta_approved": True,
                         }
                         await db.whatsapp_templates.update_one(
                             {"template_name": template_data["template_name"]},
@@ -505,22 +533,44 @@ async def sync_templates():
                             upsert=True
                         )
                         count += 1
-                
-                return {"success": True, "message": f"Synced {count} approved templates", "count": count}
-            else:
-                # Initialize defaults on failure
-                for template in DEFAULT_TEMPLATES:
-                    template["is_active"] = True
-                    await db.whatsapp_templates.update_one(
-                        {"template_name": template["template_name"]},
-                        {"$set": template},
-                        upsert=True
+
+                # Mark local templates that are no longer approved on Meta as
+                # inactive + not approved, so the send path (which now checks
+                # meta_approved) refuses them. We never auto-delete so the
+                # admin can still see the history.
+                stale = [n for n in existing.keys() if n not in approved_names]
+                if stale:
+                    await db.whatsapp_templates.update_many(
+                        {"template_name": {"$in": stale}},
+                        {"$set": {"is_active": False, "meta_approved": False,
+                                  "status": "REMOVED_FROM_META",
+                                  "synced_at": datetime.now(timezone.utc).isoformat()}},
                     )
-                return {"success": True, "message": "Initialized with default templates (API sync failed)", "count": len(DEFAULT_TEMPLATES)}
-                
+                    logger.info(f"[WhatsApp sync] Marked {len(stale)} templates inactive: {stale}")
+
+                return {"success": True, "message": f"Synced {count} approved templates", "count": count, "deactivated": len(stale)}
+            else:
+                # IMPORTANT: do NOT silently overwrite the admin's curated
+                # templates with hard-coded defaults when Meta's API hiccups.
+                # Return an error so the admin knows the sync failed.
+                err_msg = response_data.get("error", {}).get("message") if isinstance(response_data, dict) else None
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Meta template sync failed (HTTP {response.status_code}): {err_msg or 'unknown error'}. Your saved templates were left unchanged."
+                )
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Template sync error: {str(e)}")
-        # Initialize defaults on error
+        # Preserve existing curated templates on error — only initialize
+        # defaults if the DB is empty (first-time setup).
+        existing_count = await db.whatsapp_templates.count_documents({})
+        if existing_count > 0:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Meta template sync failed: {e}. Your saved templates were left unchanged."
+            )
         for template in DEFAULT_TEMPLATES:
             template["is_active"] = True
             await db.whatsapp_templates.update_one(

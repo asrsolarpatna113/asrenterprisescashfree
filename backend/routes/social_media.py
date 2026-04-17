@@ -21,8 +21,9 @@ router = APIRouter(prefix="/social", tags=["Social Media"])
 # Database connection
 MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
 DB_NAME = os.environ.get("DB_NAME", "test_database")
-client = AsyncIOMotorClient(MONGO_URL)
-db = client[DB_NAME]
+from db_client import get_db
+db = get_db(DB_NAME)
+client = db.client
 
 # Facebook Graph API - Use v19.0 for latest features
 FB_GRAPH_API = "https://graph.facebook.com/v19.0"

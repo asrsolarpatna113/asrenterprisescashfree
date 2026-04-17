@@ -16,7 +16,7 @@ from typing import Dict, Optional
 from fastapi import APIRouter, HTTPException, Request, Query
 from security import limiter, RATE_LIMIT_PAYMENT, RATE_LIMIT_SENSITIVE
 from pydantic import BaseModel, Field
-from db_client import AsyncIOMotorClient
+from db_client import AsyncIOMotorClient, get_db
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -29,8 +29,10 @@ router = APIRouter(prefix="/cashfree", tags=["Cashfree Orders"])
 # MongoDB connection
 MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
 DB_NAME = os.environ.get("DB_NAME", "test_database")
-client = AsyncIOMotorClient(MONGO_URL)
-db = client[DB_NAME]
+# Use the process-wide shared client so writes from this module are visible
+# to every other route (e.g. CRM "Cashfree Payments" view reading db.payments).
+db = get_db(DB_NAME)
+client = db.client
 
 # ==================== CONSTANTS ====================
 CASHFREE_API_VERSION = "2023-08-01"
