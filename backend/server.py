@@ -408,6 +408,21 @@ async def create_indexes():
         await db.leads.create_index([("email", 1)])
         await db.leads.create_index([("phone", 1)])
         
+        # WhatsApp messages — unique key for admin alert idempotency claim.
+        # Without this, the atomic-claim insert in send_admin_payment_alert
+        # would NOT actually be atomic (two webhook callers could both win).
+        # Sparse so it only applies to admin-alert rows that have order_id.
+        try:
+            await db.whatsapp_messages.create_index(
+                [("order_id", 1), ("type", 1)],
+                unique=True,
+                partialFilterExpression={"type": "admin_payment_alert"},
+                name="admin_alert_unique",
+            )
+        except Exception as _e:
+            # Index may already exist with different options — harmless.
+            logger.debug(f"admin_alert unique index: {_e}")
+
         # Orders collection indexes
         await db.orders.create_index([("created_at", -1)])
         await db.orders.create_index([("status", 1)])
@@ -555,6 +570,16 @@ async def startup_event():
         logger.info("Cashfree reconciliation loop started (every 5 minutes)")
     except Exception as e:
         logger.warning(f"Cashfree reconciliation loop not started: {e}")
+
+    # WhatsApp retry loop — every 60s pulls failed outgoing messages and
+    # re-fires them through the Meta API with exponential backoff (max 3
+    # attempts). Implemented in routes/cashfree_orders.py for module reuse.
+    try:
+        from routes.cashfree_orders import whatsapp_retry_loop
+        asyncio.create_task(whatsapp_retry_loop(interval_seconds=60))
+        logger.info("WhatsApp retry loop started (every 60 seconds)")
+    except Exception as e:
+        logger.warning(f"WhatsApp retry loop not started: {e}")
     
     # ==================== OWNER ACCOUNT INITIALIZATION ====================
     # Ensure owner account exists with full privileges — always runs on startup
@@ -5369,6 +5394,55 @@ async def get_crm_leads(
             "has_prev": page > 1
         }
     }
+
+@api_router.get("/crm/leads/export.csv")
+async def export_crm_leads_csv(
+    stage: Optional[str] = None,
+    assigned_to: Optional[str] = None,
+    search: Optional[str] = None,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+):
+    """Stream all leads matching the given filters as a CSV download."""
+    import csv, io
+    from fastapi.responses import StreamingResponse
+
+    query: Dict[str, Any] = {}
+    if stage: query["stage"] = stage
+    if assigned_to: query["assigned_to"] = assigned_to
+    if search:
+        query["$or"] = [
+            {"name": {"$regex": search, "$options": "i"}},
+            {"phone": {"$regex": search}},
+            {"district": {"$regex": search, "$options": "i"}},
+        ]
+    if from_date or to_date:
+        ts: Dict[str, Any] = {}
+        if from_date: ts["$gte"] = from_date
+        if to_date: ts["$lte"] = to_date
+        query["timestamp"] = ts
+
+    rows = await db.crm_leads.find(query, {"_id": 0}).sort("timestamp", -1).to_list(20000)
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["Name", "Phone", "Email", "District", "Stage", "Source",
+                "Property Type", "Assigned To", "Created At", "Last Contact"])
+    for r in rows:
+        w.writerow([
+            r.get("name", ""), r.get("phone", ""), r.get("email", ""),
+            r.get("district", ""), r.get("stage", ""), r.get("source", ""),
+            r.get("property_type", ""), r.get("assigned_to", ""),
+            r.get("timestamp", r.get("created_at", "")),
+            r.get("last_contact", ""),
+        ])
+    buf.seek(0)
+    fname = f"asr_leads_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M')}.csv"
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
 
 @api_router.post("/crm/leads")
 async def create_crm_lead(data: Dict[str, Any]):

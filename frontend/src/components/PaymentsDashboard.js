@@ -983,7 +983,8 @@ export const PaymentsDashboard = ({ leads = [] }) => {
   const [stats, setStats] = useState(null);
   const [transactions, setTransactions] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, total: 0, total_pages: 1 });
-  const [filters, setFilters] = useState({ status: "", source: "", search: "" });
+  const [filters, setFilters] = useState({ status: "", source: "", search: "", from_date: "", to_date: "" });
+  const [revenueChart, setRevenueChart] = useState({ points: [], total_revenue: 0, period: "daily" });
   
   // Delete functionality
   const [selectedTransactions, setSelectedTransactions] = useState(new Set());
@@ -1005,6 +1006,27 @@ export const PaymentsDashboard = ({ leads = [] }) => {
     }
   }, []);
 
+  const fetchRevenueChart = useCallback(async (period = "daily", days = 30) => {
+    try {
+      const res = await axios.get(`${API}/payments/revenue/chart?period=${period}&days=${days}`);
+      setRevenueChart(res.data);
+    } catch (err) {
+      console.error("Error fetching revenue chart:", err);
+    }
+  }, []);
+
+  const handleExportCSV = useCallback(() => {
+    const params = new URLSearchParams();
+    if (filters.status) params.append("status", filters.status);
+    if (filters.source) params.append("source", filters.source);
+    if (filters.search) params.append("search", filters.search);
+    if (filters.from_date) params.append("from_date", filters.from_date);
+    if (filters.to_date) params.append("to_date", filters.to_date);
+    window.open(`${API}/payments/transactions/export.csv?${params}`, "_blank");
+  }, [filters]);
+
+  useEffect(() => { fetchRevenueChart("daily", 30); }, [fetchRevenueChart]);
+
   const fetchTransactions = useCallback(async (page = 1) => {
     setLoading(true);
     try {
@@ -1014,6 +1036,8 @@ export const PaymentsDashboard = ({ leads = [] }) => {
       if (filters.status) params.append("status", filters.status);
       if (filters.source) params.append("source", filters.source);
       if (filters.search) params.append("search", filters.search);
+      if (filters.from_date) params.append("from_date", filters.from_date);
+      if (filters.to_date) params.append("to_date", filters.to_date);
 
       const res = await axios.get(`${API}/payments/transactions?${params}`);
       setTransactions(res.data.transactions || []);
@@ -1202,6 +1226,45 @@ export const PaymentsDashboard = ({ leads = [] }) => {
         </div>
       )}
 
+      {/* Revenue Chart */}
+      {revenueChart.points && revenueChart.points.length > 0 && (
+        <div className="bg-white rounded-xl border border-gray-200 p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <BarChart3 className="w-5 h-5 text-green-600" />
+              <h3 className="font-semibold text-gray-800">Revenue Trend</h3>
+              <span className="text-xs text-gray-500">
+                Last {revenueChart.days || 30}d • Total {formatCurrency(revenueChart.total_revenue)}
+              </span>
+            </div>
+            <select
+              value={revenueChart.period}
+              onChange={(e) => fetchRevenueChart(e.target.value, e.target.value === "monthly" ? 365 : (e.target.value === "weekly" ? 90 : 30))}
+              className="text-xs border border-gray-300 rounded px-2 py-1"
+            >
+              <option value="daily">Daily (30d)</option>
+              <option value="weekly">Weekly (90d)</option>
+              <option value="monthly">Monthly (1y)</option>
+            </select>
+          </div>
+          <div className="flex items-end gap-1 h-32 overflow-x-auto pb-2">
+            {(() => {
+              const max = Math.max(...revenueChart.points.map(p => p.revenue), 1);
+              return revenueChart.points.map((p, i) => (
+                <div key={i} className="flex flex-col items-center min-w-[28px] flex-1" title={`${p.label}: ${formatCurrency(p.revenue)} (${p.count} payments)`}>
+                  <div className="text-[9px] text-gray-500 mb-0.5">{p.revenue >= 1000 ? `${Math.round(p.revenue/1000)}k` : Math.round(p.revenue)}</div>
+                  <div
+                    className="w-full bg-gradient-to-t from-green-500 to-green-400 rounded-t hover:from-green-600 hover:to-green-500 transition cursor-pointer"
+                    style={{ height: `${Math.max((p.revenue / max) * 100, 2)}%`, minHeight: "4px" }}
+                  />
+                  <div className="text-[9px] text-gray-400 mt-1 truncate w-full text-center">{p.label.slice(-5)}</div>
+                </div>
+              ));
+            })()}
+          </div>
+        </div>
+      )}
+
       {/* Filters */}
       <div className="bg-white rounded-xl border border-gray-200 p-4">
         <div className="flex flex-col sm:flex-row gap-3">
@@ -1236,12 +1299,34 @@ export const PaymentsDashboard = ({ leads = [] }) => {
               <option key={key} value={key}>{val.label}</option>
             ))}
           </select>
+          <input
+            type="date"
+            value={filters.from_date}
+            onChange={(e) => setFilters({...filters, from_date: e.target.value})}
+            className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
+            title="From date"
+          />
+          <input
+            type="date"
+            value={filters.to_date}
+            onChange={(e) => setFilters({...filters, to_date: e.target.value})}
+            className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
+            title="To date"
+          />
           <button
             onClick={() => fetchTransactions(1)}
             className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 flex items-center gap-2"
           >
             <RefreshCw className="w-4 h-4" />
             Search
+          </button>
+          <button
+            onClick={handleExportCSV}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2"
+            title="Download all matching transactions as CSV"
+          >
+            <Download className="w-4 h-4" />
+            Export CSV
           </button>
         </div>
         

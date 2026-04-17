@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { ArrowLeft, Search, Phone, Mail, MapPin, Star, Trash2, Edit, X, Save, Plus, Upload, RefreshCw, UserPlus, FileSpreadsheet, FileText, Image, CheckCircle, AlertCircle, Loader2, Eye } from "lucide-react";
+import { ArrowLeft, Search, Phone, Mail, MapPin, Star, Trash2, Edit, X, Save, Plus, Upload, Download, RefreshCw, UserPlus, FileSpreadsheet, FileText, Image, CheckCircle, AlertCircle, Loader2, Eye } from "lucide-react";
 import axios from "axios";
 import { useAutoLogout } from "@/hooks/useAutoLogout";
 
@@ -354,6 +354,20 @@ export const LeadsManagement = () => {
             >
               <Upload className="w-5 h-5" />
               <span className="hidden sm:inline">CSV</span>
+            </button>
+            <button
+              onClick={() => {
+                const params = new URLSearchParams();
+                if (filterStatus && filterStatus !== "all") params.append("stage", filterStatus);
+                if (searchTerm) params.append("search", searchTerm);
+                window.open(`${API}/crm/leads/export.csv?${params}`, "_blank");
+              }}
+              className="bg-gradient-to-r from-emerald-500 to-emerald-600 text-white px-4 py-2 rounded-lg flex items-center space-x-2 hover:from-emerald-600 hover:to-emerald-700 shadow-lg"
+              data-testid="csv-export-btn"
+              title="Download all matching leads as CSV"
+            >
+              <Download className="w-5 h-5" />
+              <span className="hidden sm:inline">Export</span>
             </button>
             <button
               onClick={fetchLeads}

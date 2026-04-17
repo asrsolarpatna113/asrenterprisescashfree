@@ -1283,6 +1283,196 @@ async def get_transactions(
         "total_pages": (total + limit - 1) // limit
     }
 
+@router.get("/transactions/export.csv")
+async def export_transactions_csv(
+    status: Optional[str] = None,
+    source: Optional[str] = None,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    search: Optional[str] = None,
+):
+    """Stream all matching transactions as a CSV download.
+
+    Same filters as GET /transactions but no pagination — returns every row.
+    Suitable for accountants / GST exports.
+    """
+    import csv, io
+    from fastapi.responses import StreamingResponse
+
+    query = {}
+    if status:
+        query["status"] = status
+    if source:
+        query["source"] = source
+    if from_date or to_date:
+        cf = {}
+        if from_date: cf["$gte"] = from_date
+        if to_date: cf["$lte"] = to_date
+        query["created_at"] = cf
+    if search:
+        query["$or"] = [
+            {"customer_name": {"$regex": search, "$options": "i"}},
+            {"customer_phone": {"$regex": search, "$options": "i"}},
+            {"order_id": {"$regex": search, "$options": "i"}},
+        ]
+
+    rows = await db.payments.find(query, {"_id": 0}).sort("created_at", -1).to_list(10000)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "Order ID", "Customer Name", "Customer Phone", "Amount", "Status",
+        "Source", "Payment Method", "CF Payment ID", "Purpose",
+        "Created At", "Paid At",
+    ])
+    for r in rows:
+        writer.writerow([
+            r.get("order_id", ""),
+            r.get("customer_name", ""),
+            r.get("customer_phone", ""),
+            r.get("amount", r.get("link_amount", "")),
+            r.get("status", ""),
+            r.get("source", ""),
+            r.get("payment_method", ""),
+            r.get("cf_payment_id", ""),
+            r.get("purpose", ""),
+            r.get("created_at", ""),
+            r.get("paid_at", r.get("webhook_updated_at", "")),
+        ])
+    buf.seek(0)
+    fname = f"asr_payments_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M')}.csv"
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@router.get("/revenue/chart")
+async def get_revenue_chart(
+    period: str = "daily",  # daily | weekly | monthly
+    days: int = 30,
+):
+    """Return aggregated paid-revenue time series for the dashboard chart.
+
+    Returns: { period, points: [{label, revenue, count}, ...] }
+    """
+    if period not in ("daily", "weekly", "monthly"):
+        raise HTTPException(status_code=400, detail="period must be daily/weekly/monthly")
+    days = max(1, min(days, 365))
+
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(days=days)).isoformat()
+    cursor = db.payments.find(
+        {"status": "paid", "created_at": {"$gte": cutoff}},
+        {"_id": 0, "amount": 1, "link_amount": 1, "created_at": 1, "paid_at": 1},
+    )
+    rows = await cursor.to_list(10000)
+
+    bucket: dict = {}
+    for r in rows:
+        ts_str = r.get("paid_at") or r.get("created_at")
+        if not ts_str:
+            continue
+        try:
+            ts = datetime.fromisoformat(str(ts_str).replace("Z", "+00:00"))
+        except Exception:
+            continue
+        if period == "daily":
+            key = ts.strftime("%Y-%m-%d")
+        elif period == "weekly":
+            iso = ts.isocalendar()
+            key = f"{iso[0]}-W{iso[1]:02d}"
+        else:
+            key = ts.strftime("%Y-%m")
+        amt = float(r.get("amount") or r.get("link_amount") or 0)
+        b = bucket.setdefault(key, {"label": key, "revenue": 0.0, "count": 0})
+        b["revenue"] += amt
+        b["count"] += 1
+
+    points = sorted(bucket.values(), key=lambda x: x["label"])
+    return {"period": period, "days": days, "points": points,
+            "total_revenue": sum(p["revenue"] for p in points),
+            "total_count": sum(p["count"] for p in points)}
+
+
+@router.get("/invoice/{order_id}")
+async def get_invoice_html(order_id: str):
+    """Render a printable HTML invoice for a paid order.
+
+    Lightweight: no PDF dependency. The browser's "Save as PDF" works on this
+    page, and it can also be sent as a WhatsApp document via Meta media upload
+    in a future iteration.
+    """
+    from fastapi.responses import HTMLResponse
+    from html import escape as _esc
+    order = await db.payments.find_one({"order_id": order_id}, {"_id": 0})
+    if not order:
+        order = await db.cashfree_orders.find_one({"order_id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    # All interpolated fields are user-controlled (customer name/email/phone,
+    # purpose, payment_method dict from Cashfree). HTML-escape EVERY field
+    # before embedding into the template to neutralise stored-XSS payloads.
+    amount = float(order.get("amount") or order.get("link_amount") or 0)
+    name = _esc(str(order.get("customer_name") or "Customer"))
+    phone = _esc(str(order.get("customer_phone") or ""))
+    email = _esc(str(order.get("customer_email") or ""))
+    purpose = _esc(str(order.get("purpose") or "Payment"))
+    paid_at = _esc(str(order.get("paid_at") or order.get("webhook_updated_at") or order.get("created_at") or ""))
+    method_raw = order.get("payment_method") or "Online"
+    method = _esc(str(method_raw) if not isinstance(method_raw, dict) else (next(iter(method_raw.keys())) or "Online"))
+    cf_pid = _esc(str(order.get("cf_payment_id") or ""))
+    status = _esc(str(order.get("status") or "pending"))
+    order_id_safe = _esc(str(order_id))
+
+    html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>Invoice {order_id} — ASR Enterprises</title>
+<style>
+body{{font-family:Arial,sans-serif;margin:0;padding:30px;color:#222;background:#fff}}
+.invoice{{max-width:780px;margin:auto;border:1px solid #ddd;padding:30px;border-radius:8px}}
+h1{{color:#0a6ebd;margin:0 0 4px 0}}
+.muted{{color:#666;font-size:13px}}
+table{{width:100%;border-collapse:collapse;margin-top:18px}}
+th,td{{padding:10px;border-bottom:1px solid #eee;text-align:left}}
+.total{{font-size:20px;font-weight:bold;color:#0a6ebd}}
+.badge{{display:inline-block;padding:3px 10px;border-radius:4px;background:#d4edda;color:#155724;font-size:12px}}
+.badge.unpaid{{background:#f8d7da;color:#721c24}}
+.row{{display:flex;justify-content:space-between;margin-top:18px}}
+.box{{flex:1;padding:0 12px}}
+.print{{margin-top:24px;text-align:center}}
+@media print{{.print{{display:none}}body{{padding:0}}.invoice{{border:none}}}}
+</style></head><body><div class="invoice">
+<div class="row" style="border-bottom:2px solid #0a6ebd;padding-bottom:10px;margin-top:0">
+  <div><h1>ASR Enterprises</h1>
+    <div class="muted">Solar Solutions • Patna, Bihar<br>
+    asrenterprises.in • +91 8877896889</div></div>
+  <div style="text-align:right">
+    <h2 style="margin:0">INVOICE</h2>
+    <div class="muted">#{order_id_safe}</div>
+    <div style="margin-top:6px"><span class="badge {'unpaid' if status != 'paid' else ''}">{status.upper()}</span></div>
+  </div></div>
+<div class="row">
+  <div class="box"><strong>Bill To</strong><br>{name}<br>{phone}<br>{email}</div>
+  <div class="box" style="text-align:right"><strong>Date</strong><br>{paid_at[:19] if paid_at else ''}</div>
+</div>
+<table>
+<tr><th>Description</th><th style="text-align:right">Amount (₹)</th></tr>
+<tr><td>{purpose}</td><td style="text-align:right">{float(amount):,.2f}</td></tr>
+<tr><td class="total">Total</td><td class="total" style="text-align:right">₹ {float(amount):,.2f}</td></tr>
+</table>
+<div class="row" style="margin-top:24px">
+  <div class="box"><strong>Payment Method</strong><br>{method}</div>
+  <div class="box"><strong>Cashfree Ref</strong><br>{cf_pid or '—'}</div>
+</div>
+<div class="muted" style="margin-top:30px;text-align:center;border-top:1px solid #eee;padding-top:14px">
+  Thank you for choosing ASR Enterprises. For support contact +91 8877896889.
+</div>
+<div class="print"><button onclick="window.print()" style="padding:10px 22px;background:#0a6ebd;color:#fff;border:none;border-radius:4px;cursor:pointer">Print / Save PDF</button></div>
+</div></body></html>"""
+    return HTMLResponse(content=html)
+
+
 @router.get("/transaction/{payment_id}")
 async def get_transaction_details(payment_id: str):
     """Get detailed transaction info"""

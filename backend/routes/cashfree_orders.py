@@ -585,34 +585,189 @@ Contact: {ASR_DISPLAY_PHONE}
 
 async def retry_failed_whatsapp_messages():
     """
-    Retry sending failed WhatsApp messages (called periodically or manually).
-    Retries up to 3 times with exponential backoff.
+    Retry sending failed payment-related WhatsApp messages.
+
+    Looks for any whatsapp_messages row whose status is "failed" and has been
+    retried fewer than 3 times. For each row we re-fire the original template
+    via send_whatsapp_template. On success we record status="sent" + the new
+    wa_message_id; on failure we bump retry_count so the next pass will try
+    again (or stop, after 3 attempts).
+
+    Backoff: we only retry rows whose `last_retry` is older than (2**retry_count)
+    minutes, giving 1, 2, 4 minute spacing.
+    """
+    from routes.whatsapp import send_whatsapp_template  # local import — avoid cycle at import time
+    now = datetime.now(timezone.utc)
+    try:
+        candidates = await db.whatsapp_messages.find({
+            "status": "failed",
+            "direction": "outgoing",
+            "retry_count": {"$lt": 3},
+        }).to_list(50)
+
+        retried = 0
+        for msg in candidates:
+            retry_count = msg.get("retry_count", 0)
+            # Exponential backoff between retries
+            last_try_str = msg.get("last_retry") or msg.get("created_at")
+            try:
+                last_try = datetime.fromisoformat(last_try_str.replace("Z", "+00:00"))
+                wait_minutes = 2 ** retry_count
+                if (now - last_try).total_seconds() < wait_minutes * 60:
+                    continue
+            except Exception:
+                pass  # if we can't parse, just retry
+
+            template_name = msg.get("template_name")
+            phone = msg.get("phone")
+            variables = msg.get("variables") or []
+            order_id = msg.get("order_id")
+
+            if not template_name or not phone:
+                # Row was logged by send_payment_whatsapp's text-fallback path
+                # (no template captured). If it has an order_id, the cashfree
+                # reconcile loop will re-run send_payment_confirmations from
+                # scratch, so we leave retry_count alone here. We only hard
+                # skip rows with neither template nor order context.
+                if not order_id:
+                    await db.whatsapp_messages.update_one(
+                        {"id": msg.get("id")},
+                        {"$set": {"retry_count": 3,
+                                  "last_retry": now.isoformat(),
+                                  "retry_skipped": "no template_name and no order_id"}},
+                    )
+                else:
+                    await db.whatsapp_messages.update_one(
+                        {"id": msg.get("id")},
+                        {"$set": {"retry_deferred_to_reconcile": True,
+                                  "last_retry_check": now.isoformat()}},
+                    )
+                continue
+
+            logger.info(f"[WhatsApp-Retry] msg={msg.get('id')} attempt={retry_count + 1} template={template_name} phone=****{phone[-4:]}")
+            try:
+                result = await send_whatsapp_template(
+                    phone=phone,
+                    template_name=template_name,
+                    variables=variables,
+                    lead_id=msg.get("lead_id"),
+                )
+            except Exception as e:
+                result = {"success": False, "error": str(e)}
+
+            update = {
+                "retry_count": retry_count + 1,
+                "last_retry": now.isoformat(),
+            }
+            if result.get("success"):
+                update["status"] = "sent"
+                update["wa_message_id"] = result.get("wa_message_id")
+                update["retried_to_success_at"] = now.isoformat()
+                logger.info(f"[WhatsApp-Retry] ✅ recovered msg={msg.get('id')}")
+            else:
+                update["last_error"] = result.get("error")
+                logger.warning(f"[WhatsApp-Retry] ✗ msg={msg.get('id')} still failing: {result.get('error')}")
+
+            await db.whatsapp_messages.update_one({"id": msg.get("id")}, {"$set": update})
+            retried += 1
+
+        return retried
+    except Exception as e:
+        logger.error(f"[WhatsApp-Retry] loop error: {e}")
+        return 0
+
+
+async def whatsapp_retry_loop(interval_seconds: int = 60):
+    """Background task: continuously retry failed WhatsApp messages."""
+    import asyncio
+    while True:
+        try:
+            await asyncio.sleep(interval_seconds)
+            count = await retry_failed_whatsapp_messages()
+            if count:
+                logger.info(f"[WhatsApp-Retry] processed {count} failed messages this pass")
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"[WhatsApp-Retry] loop error: {e}")
+
+
+# ==================== ADMIN ALERT ====================
+async def send_admin_payment_alert(order: Dict, amount: float):
+    """Notify the business owner on every successful Cashfree payment.
+
+    Uses the same Meta-approved template ('payment_sucess_confirmation') as the
+    customer confirmation, but addressed to the owner's phone (ASR1001 record
+    or env ADMIN_ALERT_PHONE override). Failures here NEVER block the webhook.
     """
     try:
-        failed_messages = await db.whatsapp_messages.find({
-            "status": "failed",
-            "retry_count": {"$lt": 3},
-            "type": {"$in": ["payment_success_template", "payment_request_template"]}
-        }).to_list(10)
-        
-        for msg in failed_messages:
-            retry_count = msg.get("retry_count", 0) + 1
-            logger.info(f"[WhatsApp] Retrying message {msg.get('id')} (attempt {retry_count})")
-            
-            # Update retry count
-            await db.whatsapp_messages.update_one(
-                {"id": msg.get("id")},
-                {"$set": {"retry_count": retry_count, "last_retry": datetime.now(timezone.utc).isoformat()}}
-            )
-            
-            # Note: Actual retry logic would call send_payment_whatsapp again
-            # For now, just log the attempt
-            logger.info(f"[WhatsApp] Retry logged for message {msg.get('id')}")
-            
-        return len(failed_messages)
+        from routes.whatsapp import send_whatsapp_template
+        admin_phone = os.environ.get("ADMIN_ALERT_PHONE")
+        if not admin_phone:
+            owner = await db.crm_staff_accounts.find_one({"staff_id": "ASR1001"}, {"_id": 0})
+            admin_phone = (owner or {}).get("phone") or (owner or {}).get("mobile")
+        if not admin_phone:
+            logger.info("[AdminAlert] no admin phone configured — skipping")
+            return False
+
+        # Atomic claim — insert a sentinel row keyed on (order_id, type). If
+        # the insert fails because the row already exists, another caller is
+        # already handling (or has handled) this alert and we exit.
+        order_id = order.get("order_id")
+        claim_id = str(uuid.uuid4())
+        try:
+            await db.whatsapp_messages.insert_one({
+                "id": claim_id,
+                "order_id": order_id,
+                "type": "admin_payment_alert",
+                "status": "in_flight",
+                "phone": admin_phone,
+                "direction": "outgoing",
+                "claimed_at": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception:
+            # Likely already exists / claimed by sibling caller — bail out.
+            return True
+
+        # Belt-and-braces: also check for a previously SENT alert (older rows
+        # before atomic-claim was added).
+        prior = await db.whatsapp_messages.find_one({
+            "order_id": order_id,
+            "type": "admin_payment_alert",
+            "status": "sent",
+        })
+        if prior:
+            await db.whatsapp_messages.delete_one({"id": claim_id})
+            return True
+
+        customer_name = order.get("customer_name", "Customer")
+        result = await send_whatsapp_template(
+            phone=admin_phone,
+            template_name="payment_sucess_confirmation",
+            variables=[f"OWNER ALERT — {customer_name}", order_id, str(int(amount))],
+        )
+
+        # Update the sentinel row with the outcome (sent or failed) so the
+        # retry loop can find it and re-send while preserving idempotency.
+        update = {
+            "template_name": "payment_sucess_confirmation",
+            "variables": [f"OWNER ALERT — {customer_name}", order_id, str(int(amount))],
+            "result_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if result.get("success"):
+            update["status"] = "sent"
+            update["wa_message_id"] = result.get("wa_message_id")
+            logger.info(f"[AdminAlert] ✅ sent owner alert for order {order_id}")
+        else:
+            update["status"] = "failed"
+            update["error"] = result.get("error")
+            update["retry_count"] = 0
+            logger.warning(f"[AdminAlert] ✗ owner alert failed for {order_id}: {result.get('error')}")
+        await db.whatsapp_messages.update_one({"id": claim_id}, {"$set": update})
+        return bool(result.get("success"))
     except Exception as e:
-        logger.error(f"[WhatsApp] Retry error: {e}")
-        return 0
+        logger.error(f"[AdminAlert] error: {e}")
+        return False
 
 
 async def send_payment_sms(phone: str, order_id: str, amount: float, purpose: str):
@@ -1363,6 +1518,12 @@ async def _mark_order_paid(order: Dict, payment_data: Dict, source: str = "webho
     except Exception as e:
         logger.error(f"[{source}] send_payment_confirmations failed for {order_id}: {e}")
         confirmations = {"error": str(e)}
+
+    # Owner alert (non-blocking, idempotent) — see send_admin_payment_alert.
+    try:
+        await send_admin_payment_alert(order, payment_amount)
+    except Exception as e:
+        logger.error(f"[{source}] send_admin_payment_alert failed for {order_id}: {e}")
 
     # Persist confirmation outcome on the order so the webhook handler can
     # detect "paid but WhatsApp never reached the customer" on a duplicate

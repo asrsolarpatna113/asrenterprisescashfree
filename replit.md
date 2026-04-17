@@ -38,3 +38,29 @@ ASR Enterprises is a full-stack web application with a Create React App frontend
 - Only APPROVED templates from Meta are stored as active; any template that disappears from Meta is marked `is_active=False` and `meta_approved=False` (kept for history, but unusable).
 - On Meta API failure the endpoint now returns `502` instead of silently overwriting the admin's curated table with hard-coded `DEFAULT_TEMPLATES`.
 - Preserves the admin's `is_active` toggle on re-sync.
+
+---
+
+## 2026-04-17 — Stability + Automation Sweep (deployed)
+
+### Backend additions
+- **WhatsApp auto-retry** (`routes/cashfree_orders.py: retry_failed_whatsapp_messages`, `whatsapp_retry_loop`):
+  - Real send retry (re-fires `send_whatsapp_template`) with exponential backoff (1, 2, 4 min) and max 3 attempts.
+  - 60-second background task scheduled in `server.py` startup.
+  - Rows missing `template_name` but with `order_id` are deferred to the cashfree reconcile loop instead of being permanently skipped.
+- **Owner alert on payment** (`send_admin_payment_alert`, hooked into `_mark_order_paid`):
+  - WhatsApp to ASR1001 owner phone (or `ADMIN_ALERT_PHONE` env override) on every successful Cashfree payment.
+  - Atomic claim via insert + sparse unique index `whatsapp_messages.(order_id, type)` for `admin_payment_alert` — survives concurrent webhooks.
+  - Failures are non-blocking and re-attempted by the WhatsApp retry loop.
+- **CSV export endpoints**: `GET /api/payments/transactions/export.csv`, `GET /api/crm/leads/export.csv` (filters: status/source/from_date/to_date/search).
+- **Revenue chart**: `GET /api/payments/revenue/chart?period=daily|weekly|monthly&days=N` returns aggregated paid-revenue time series.
+- **HTML invoice**: `GET /api/payments/invoice/{order_id}` (printable, browser "Save as PDF"). All user-controlled fields are HTML-escaped to prevent XSS.
+
+### Frontend additions
+- **PaymentsDashboard**: date-range filter (from/to), Export CSV button, Revenue Trend bar chart (toggle Daily/Weekly/Monthly).
+- **LeadsManagement**: Export CSV button next to existing Import CSV.
+
+### Code-review hardening (architect FAIL → PASS)
+- XSS in invoice fixed (every field run through `html.escape`).
+- Admin-alert idempotency fixed via atomic claim + sparse unique index.
+- Retry loop no longer drops text-fallback rows that have order context.
