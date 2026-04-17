@@ -689,7 +689,7 @@ async def simple_meta_webhook(request: Request):
     hub_verify_token = request.query_params.get("hub.verify_token")
     hub_challenge = request.query_params.get("hub.challenge")
     
-    logger.info(f"[SIMPLE WEBHOOK] mode={hub_mode}, token={hub_verify_token}, challenge={hub_challenge}")
+    logger.info(f"[SIMPLE WEBHOOK] mode={hub_mode}, token=***masked***, challenge={hub_challenge}")
     
     if hub_mode == "subscribe" and hub_verify_token == os.environ.get("META_VERIFY_TOKEN", "asrsolar2026"):
         return PlainTextResponse(content=hub_challenge, status_code=200)
@@ -6711,9 +6711,24 @@ MSG91_SENDER_ID = os.environ.get("MSG91_SENDER_ID", "ASRSOL")
 MSG91_WIDGET_ID = os.environ.get("MSG91_WIDGET_ID", "")
 MSG91_TOKEN_AUTH = os.environ.get("MSG91_TOKEN_AUTH", "")
 
+
+def _require_msg91() -> None:
+    """Fail fast with a clear 503 if MSG91 credentials aren't configured.
+
+    Called from every MSG91 send/verify path so the OTP system never
+    silently calls the upstream with an empty auth key.
+    """
+    if not MSG91_AUTH_KEY:
+        logger.error("MSG91 not configured: set MSG91_AUTH_KEY in environment.")
+        raise HTTPException(
+            status_code=503,
+            detail="Missing environment configuration: MSG91_AUTH_KEY",
+        )
+
 @api_router.post("/otp/send")
 async def send_otp(request: Request, data: Dict[str, Any]):
     """Send OTP to mobile number via MSG91 backend API"""
+    _require_msg91()
     mobile = data.get("mobile", "").replace(" ", "").replace("+", "")
     if not mobile:
         raise HTTPException(status_code=400, detail="Mobile number is required")
@@ -10293,14 +10308,14 @@ async def verify_unified_webhook(request: Request):
     hub_verify_token = request.query_params.get("hub.verify_token")
     hub_challenge = request.query_params.get("hub.challenge")
     
-    logger.info(f"Meta webhook verification: mode={hub_mode}, token={hub_verify_token}")
+    logger.info(f"Meta webhook verification: mode={hub_mode}, token=***masked***")
     
     if hub_mode == "subscribe" and hub_verify_token == WEBHOOK_VERIFY_TOKEN:
         logger.info("Meta webhook verified successfully!")
         from starlette.responses import PlainTextResponse
         return PlainTextResponse(hub_challenge)
     
-    logger.warning(f"Meta webhook verification failed: expected token={WEBHOOK_VERIFY_TOKEN}, got={hub_verify_token}")
+    logger.warning("Meta webhook verification failed: token mismatch")
     raise HTTPException(status_code=403, detail="Verification failed")
 
 @api_router.post("/webhook")
