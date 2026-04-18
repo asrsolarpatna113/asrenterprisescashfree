@@ -14,7 +14,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Optional
 from fastapi import APIRouter, HTTPException, Request, Query
-from security import limiter, RATE_LIMIT_PAYMENT, RATE_LIMIT_SENSITIVE
+from security import limiter, RATE_LIMIT_PAYMENT, RATE_LIMIT_SENSITIVE, require_admin_token as _shared_require_admin_token
 from pydantic import BaseModel, Field
 from db_client import AsyncIOMotorClient, get_db
 from dotenv import load_dotenv

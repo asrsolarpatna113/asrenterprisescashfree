@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, ConfigDict
 import uuid
 import asyncio
 import logging
+from security import require_admin_token
 
 logger = logging.getLogger(__name__)
 
@@ -139,19 +140,37 @@ async def bulk_delete_leads(request: Request):
     """Soft delete - Move leads to trash (kept for 30 days)"""
     data = await request.json()
     lead_ids = data.get("lead_ids", [])
-    
+    actor = data.get("actor_id", "") or data.get("deleted_by", "") or "unknown"
+
     if not lead_ids:
         return {"success": False, "error": "No lead IDs provided"}
-    
-    # Soft delete - set deleted_at timestamp and is_deleted flag
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+
     result = await db.crm_leads.update_many(
         {"id": {"$in": lead_ids}},
         {"$set": {
             "is_deleted": True,
-            "deleted_at": datetime.now(timezone.utc).isoformat()
+            "deleted_at": now_iso,
+            "deleted_by": actor,
         }}
     )
-    
+
+    # Audit log — non-blocking fire-and-forget
+    try:
+        from security import get_real_ip as _get_ip
+        actor_ip = _get_ip(request)
+        await db.admin_audit_log.insert_one({
+            "action": "lead_bulk_soft_delete",
+            "actor": actor,
+            "actor_ip": actor_ip,
+            "lead_ids": lead_ids,
+            "affected_count": result.modified_count,
+            "timestamp": now_iso,
+        })
+    except Exception as _ae:
+        logger.warning(f"[Audit] lead_bulk_soft_delete log failed: {_ae}")
+
     return {
         "success": True,
         "deleted_count": result.modified_count,
@@ -208,15 +227,50 @@ async def restore_leads(request: Request):
 
 @router.delete("/leads/permanent-delete")
 async def permanent_delete_leads(request: Request):
-    """Permanently delete leads (no recovery)"""
+    """Permanently delete leads (no recovery).
+
+    Auth: requires `x-admin-token` header matching ADMIN_API_TOKEN env var
+    (same token used for Cashfree sync and test-data cleanup endpoints).
+    In dev with no token configured, the call is allowed with a warning.
+    """
+    require_admin_token(request)
+
     data = await request.json()
     lead_ids = data.get("lead_ids", [])
-    
+    actor = data.get("actor_id", "") or data.get("deleted_by", "") or "unknown"
+
     if not lead_ids:
         return {"success": False, "error": "No lead IDs provided"}
-    
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    # Capture lead names before deletion for the audit log
+    try:
+        previews = await db.crm_leads.find(
+            {"id": {"$in": lead_ids}}, {"id": 1, "name": 1, "phone": 1, "_id": 0}
+        ).to_list(length=500)
+    except Exception:
+        previews = []
+
     result = await db.crm_leads.delete_many({"id": {"$in": lead_ids}})
-    
+
+    # Audit log
+    try:
+        from security import get_real_ip as _get_ip
+        actor_ip = _get_ip(request)
+        await db.admin_audit_log.insert_one({
+            "action": "lead_permanent_delete",
+            "actor": actor,
+            "actor_ip": actor_ip,
+            "lead_ids": lead_ids,
+            "lead_previews": previews[:50],
+            "affected_count": result.deleted_count,
+            "timestamp": now_iso,
+            "irreversible": True,
+        })
+    except Exception as _ae:
+        logger.warning(f"[Audit] lead_permanent_delete log failed: {_ae}")
+
     return {
         "success": True,
         "deleted_count": result.deleted_count,

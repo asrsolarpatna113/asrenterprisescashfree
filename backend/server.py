@@ -509,10 +509,50 @@ async def create_indexes():
         # Bookings collection indexes
         await db.bookings.create_index([("created_at", -1)])
         await db.bookings.create_index([("status", 1)])
-        
+
         # Product reviews indexes
         await db.product_reviews.create_index([("product_id", 1)])
         await db.product_reviews.create_index([("created_at", -1)])
+
+        # crm_leads — primary CRM collection (5000+ records in production).
+        # Compound index on the most-used advanced-search filters.
+        await db.crm_leads.create_index([("timestamp", -1)])
+        await db.crm_leads.create_index([("stage", 1)])
+        await db.crm_leads.create_index([("source", 1)])
+        await db.crm_leads.create_index([("priority", 1)])
+        await db.crm_leads.create_index([("assigned_to", 1)])
+        await db.crm_leads.create_index([("district", 1)])
+        await db.crm_leads.create_index([("property_type", 1)])
+        await db.crm_leads.create_index([("is_deleted", 1)])
+        await db.crm_leads.create_index([("next_follow_up", 1)])
+        await db.crm_leads.create_index([("phone", 1)])
+        await db.crm_leads.create_index([("is_deleted", 1), ("timestamp", -1)])
+        # Text index supports full-text search on name/phone/email/district
+        try:
+            await db.crm_leads.create_index(
+                [("name", "text"), ("phone", "text"), ("email", "text"), ("district", "text")],
+                name="crm_leads_text_search",
+            )
+        except Exception as _te:
+            logger.debug(f"crm_leads text index: {_te}")
+
+        # cashfree_orders — production payments collection.
+        await db.cashfree_orders.create_index([("order_id", 1)], unique=True, sparse=True)
+        await db.cashfree_orders.create_index([("status", 1)])
+        await db.cashfree_orders.create_index([("created_at", -1)])
+        await db.cashfree_orders.create_index([("customer_phone", 1)])
+        await db.cashfree_orders.create_index([("is_deleted", 1)])
+        await db.cashfree_orders.create_index([("is_deleted", 1), ("status", 1)])
+        await db.cashfree_orders.create_index([("lead_id", 1)], sparse=True)
+
+        # admin_audit_log — write-once records of sensitive admin actions.
+        await db.admin_audit_log.create_index([("timestamp", -1)])
+        await db.admin_audit_log.create_index([("action", 1)])
+        await db.admin_audit_log.create_index([("actor_ip", 1)])
+        # Auto-expire audit entries after 1 year
+        await db.admin_audit_log.create_index(
+            [("timestamp", 1)], expireAfterSeconds=86400 * 365, name="audit_ttl"
+        )
         
         logger.info("✅ Database indexes created successfully")
     except Exception as e:

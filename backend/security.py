@@ -344,3 +344,44 @@ def log_security_event(event_type: str, ip: str, details: Dict[str, Any]):
         "details": details
     }
     logger.info(f"🔐 SECURITY_EVENT: {log_entry}")
+
+
+# ==================== SHARED ADMIN AUTH ====================
+
+def require_admin_token(request: Request) -> None:
+    """Gate sensitive admin/CRM endpoints behind a shared secret.
+
+    Reads the expected value from ADMIN_API_TOKEN env var (preferred) or,
+    as a backward-compatible fallback, CASHFREE_WEBHOOK_SECRET.
+    Header name: `x-admin-token`.
+
+    If NEITHER secret is configured the request is allowed with a warning
+    so first-time setups work out of the box; production MUST set one.
+
+    Usage:
+        from security import require_admin_token
+        ...
+        @router.delete("/leads/permanent-delete")
+        async def my_endpoint(request: Request):
+            require_admin_token(request)
+    """
+    import os
+    import hmac as _hmac
+    expected = (
+        os.environ.get("ADMIN_API_TOKEN", "").strip()
+        or os.environ.get("CASHFREE_WEBHOOK_SECRET", "").strip()
+    )
+    if not expected:
+        logger.warning(
+            "Admin-gated endpoint called but no ADMIN_API_TOKEN configured — "
+            "request allowed. Set ADMIN_API_TOKEN in production."
+        )
+        return
+    provided = (request.headers.get("x-admin-token") or "").strip()
+    if not provided or not _hmac.compare_digest(provided, expected):
+        log_security_event(
+            "admin_token_rejected",
+            get_real_ip(request),
+            {"path": str(request.url.path)},
+        )
+        raise HTTPException(status_code=401, detail="Admin token required")
