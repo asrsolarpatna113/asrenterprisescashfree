@@ -1215,18 +1215,22 @@ export const WhatsAppModule = () => {
           {botStatus?.today_stats && (
             <div className="bg-purple-50 border border-purple-100 rounded-xl p-4">
               <p className="text-sm font-medium text-purple-700 mb-2">Today's Bot Activity</p>
-              <div className="grid grid-cols-3 gap-3 text-center">
+              <div className="grid grid-cols-4 gap-2 text-center">
                 <div>
                   <p className="text-2xl font-bold text-purple-800">{botStatus.today_stats.welcome_sent || 0}</p>
-                  <p className="text-xs text-purple-600">Welcome Sent</p>
+                  <p className="text-xs text-purple-600">Welcome</p>
                 </div>
                 <div>
                   <p className="text-2xl font-bold text-purple-800">{botStatus.today_stats.quick_replies_sent || 0}</p>
-                  <p className="text-xs text-purple-600">Menu Replies</p>
+                  <p className="text-xs text-purple-600">Menu</p>
+                </div>
+                <div>
+                  <p className="text-2xl font-bold text-orange-700">{botStatus.today_stats.intent_replies_sent || 0}</p>
+                  <p className="text-xs text-orange-600">Intent</p>
                 </div>
                 <div>
                   <p className="text-2xl font-bold text-purple-800">{botStatus.today_stats.ai_replies_sent || 0}</p>
-                  <p className="text-xs text-purple-600">AI Replies</p>
+                  <p className="text-xs text-purple-600">AI</p>
                 </div>
               </div>
               <p className="text-xs text-purple-500 mt-2 text-center">{botStatus.current_time_ist}</p>

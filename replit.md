@@ -24,6 +24,23 @@ ASR Enterprises is a full-stack web application with a Create React App frontend
 - Run command starts FastAPI on `0.0.0.0:${PORT:-5000}` and serves the compiled React app from `frontend/build`.
 - Frontend production dependencies were aligned for normal npm install: React 18, React DOM 18, date-fns 3, ESLint 8, AJV 8.
 - The public website theme uses a premium light solar palette with sunlit gold, solar-glass blue, emerald CTA accents, and visible solar-panel grid/array effects on the homepage hero and zero-bill section.
+## April 18, 2026 — Solar Mitra Complete AI Bot (Session 3)
+
+### Architecture: Full Solar Mitra Intent Engine
+- **Priority chain**: Menu options (1-7) → Solar Intent Layer → Welcome → AI fallback → no reply
+- **Intent layer** (`detect_solar_intent`): handles price/subsidy/loan/installation with Hinglish templates — zero AI API cost
+- **Bill extraction** (`extract_bill_smart`): context-aware (requires ₹ / "bill" / "monthly" signal to avoid false positives from kW numbers)
+- **System sizing** (`estimate_solar_system`): Bihar market pricing table (1kW→10kW+) with govt subsidy per tier
+- **Bill auto-save**: whenever bill is detected in ANY message, it's written to `crm_leads.monthly_bill` + `suggested_capacity`
+- **AI System prompt**: full Solar Mitra spec — Bihar pricing, ROI, subsidy table, lead-capture goals, CTA rules
+- **Admin stats**: 4-column Today Activity (Welcome / Menu / Intent / AI) in bot settings panel
+
+### Modified files (Session 3)
+- `backend/routes/whatsapp_automation.py` — Added `SOLAR_INTENT_KEYWORDS`, `SOLAR_SYSTEM_TABLE`, `detect_solar_intent()`, `estimate_solar_system()`, `extract_bill_smart()`, `build_solar_intent_reply()`; inserted intent layer in `process_auto_reply` between option detection and welcome logic
+- `backend/routes/whatsapp_ai.py` — Upgraded `WHATSAPP_AI_SYSTEM_PROMPT` with full Solar Mitra spec (pricing, subsidy, ROI, lead-capture rules, CTA rules, system sizing guide)
+- `backend/routes/whatsapp.py` — Added `intent_replies_sent` counter to bot status stats
+- `frontend/src/components/WhatsAppCRM.js` — Bot Activity grid upgraded to 4 columns (Intent counter added, orange highlight)
+
 ## April 18, 2026 — WhatsApp AI Bot Automation (Session 2)
 
 ### Architecture: WhatsApp Automation + AI Fallback

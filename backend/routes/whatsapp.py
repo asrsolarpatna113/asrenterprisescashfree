@@ -2342,6 +2342,13 @@ async def get_bot_status():
     })
     stats["ai_replies_sent"] = ai_replies_today
 
+    # Intent-template replies sent today (price/subsidy/bill/loan/installation)
+    intent_replies_today = await db.whatsapp_messages.count_documents({
+        "auto_reply_type": "intent_reply",
+        "created_at": {"$gte": today_start.isoformat()}
+    })
+    stats["intent_replies_sent"] = intent_replies_today
+
     return {
         "bot_active": bot_settings.get("bot_enabled", True),       # display alias
         "bot_enabled": bot_settings.get("bot_enabled", True),      # actual DB field

@@ -275,6 +275,164 @@ KEYWORD_MAPPINGS = {
           "representative", "not bot", "real human", "talk to a person", "0️⃣"]
 }
 
+# ==================== SOLAR MITRA INTENT DETECTION ====================
+
+# Keywords for each solar intent (checked AFTER menu option 1-7 detection)
+SOLAR_INTENT_KEYWORDS: Dict[str, List[str]] = {
+    "price": [
+        "price", "cost", "kitna lagega", "kitna hai", "rate", "kitna paisa",
+        "kharcha", "budget", "paisa", "amount", "mehanga", "sasta",
+        "price kya", "cost kya", "quote", "quotation", "kitna aayega",
+    ],
+    "subsidy": [
+        "subsidy", "yojana", "surya ghar", "pm surya", "government",
+        "sarkari", "scheme", "muft", "free mein", "subvention",
+        "government se", "sarkar degi", "subsidi", "subside",
+    ],
+    "loan": [
+        "loan", "emi", "finance", "karz", "installment", "kist",
+        "monthly payment", "qarz", "bank se", "bhaad", "kiraya",
+        "instalment", "no cost emi", "zero interest", "avail loan",
+    ],
+    "installation": [
+        "install", "lagwana", "lagana", "fitting", "setup",
+        "kab lagega", "kitne din", "time kitna", "kab hoga",
+        "process kya", "kab shuru", "work kitne din", "kitne time",
+    ],
+}
+
+# Keywords that signal the user is sharing their monthly bill
+BILL_CONTEXT_SIGNALS: List[str] = [
+    "bill", "bijli", "electricity", "unit", "monthly", "mahine",
+    "per month", "har mahine", "month mein", "bijli ka", "current bill",
+    "light bill", "₹", "rs ", "rs.", "rupee", "rupees", "inr",
+]
+
+# Bihar-specific system sizing + pricing table
+SOLAR_SYSTEM_TABLE: List[Dict] = [
+    {
+        "max_bill": 1500,
+        "size": "1kW",
+        "price": "₹60,000–₹75,000",
+        "subsidy": "₹30,000",
+        "roi": "3–4 saal",
+    },
+    {
+        "max_bill": 3000,
+        "size": "2kW",
+        "price": "₹1.2L–₹1.5L",
+        "subsidy": "₹60,000",
+        "roi": "3–4 saal",
+    },
+    {
+        "max_bill": 5000,
+        "size": "3kW",
+        "price": "₹1.8L–₹2.2L",
+        "subsidy": "₹78,000",
+        "roi": "3–4 saal",
+    },
+    {
+        "max_bill": 8000,
+        "size": "5kW",
+        "price": "₹3L–₹3.8L",
+        "subsidy": "₹78,000",
+        "roi": "3–4 saal",
+    },
+    {
+        "max_bill": 999999,
+        "size": "10kW+",
+        "price": "₹6L+",
+        "subsidy": "₹78,000",
+        "roi": "3–4 saal",
+    },
+]
+
+
+def detect_solar_intent(content: str) -> Optional[str]:
+    """
+    Detect a specific solar sales intent from free-text Hinglish messages.
+    Returns one of: 'price', 'subsidy', 'loan', 'installation', or None.
+    """
+    c = content.lower()
+    for intent, keywords in SOLAR_INTENT_KEYWORDS.items():
+        if any(kw in c for kw in keywords):
+            return intent
+    return None
+
+
+def estimate_solar_system(bill_amount: int) -> Dict:
+    """
+    Return size, price range, subsidy and ROI for a given monthly bill (INR).
+    """
+    for row in SOLAR_SYSTEM_TABLE:
+        if bill_amount <= row["max_bill"]:
+            return row
+    return SOLAR_SYSTEM_TABLE[-1]
+
+
+def extract_bill_smart(content: str) -> Optional[int]:
+    """
+    Context-aware bill extractor.
+    Only returns a number when there is a clear signal that the user is
+    sharing their monthly electricity bill (currency symbol or bill keyword).
+    Avoids false positives from kW ratings, option numbers, etc.
+    """
+    c = content.lower()
+    # Must have at least one context signal
+    has_context = any(sig in c for sig in BILL_CONTEXT_SIGNALS) or "₹" in content
+    if not has_context:
+        return None
+
+    # Clean currency markers then search for 3-6 digit numbers
+    cleaned = (
+        content
+        .replace("₹", " ")
+        .replace("Rs.", " ")
+        .replace("rs.", " ")
+        .replace("Rs ", " ")
+        .replace("rs ", " ")
+        .lower()
+        .replace("rupees", " ")
+        .replace("rupee", " ")
+        .replace("inr", " ")
+    )
+    for num_str in re.findall(r"\b\d{3,6}\b", cleaned):
+        num = int(num_str)
+        if 300 <= num <= 100_000:
+            return num
+    return None
+
+
+def build_solar_intent_reply(intent: str) -> Optional[str]:
+    """
+    Return a short Hinglish template reply for a detected solar intent.
+    Bill-specific replies are handled inline in process_auto_reply.
+    """
+    templates = {
+        "price": (
+            "Solar system approx ₹60k–₹75k per kW hota hai 👍\n"
+            "Exact price aapke bill pe depend karega.\n"
+            "Aapka monthly bijli bill kitna aata hai?"
+        ),
+        "subsidy": (
+            "PM Surya Ghar Yojana mein ₹78,000 tak subsidy milti hai 👍\n"
+            "2kW pe ₹60,000 aur 3kW+ pe ₹78,000 government deti hai.\n"
+            "Aapka monthly bill kitna hai? System size calculate karte hain."
+        ),
+        "loan": (
+            "Haan ji, EMI/loan option available hai 👍\n"
+            "Solar lagane ke baad bill almost zero ho sakta hai.\n"
+            "Aapka monthly bill kitna hai? EMI calculate karte hain."
+        ),
+        "installation": (
+            "Installation 2–3 din mein ho jaati hai 👍\n"
+            "MNRE certified team ghar aake survey aur fitting karti hai.\n"
+            "Aapka area kahan hai? Free site visit book karein?"
+        ),
+    }
+    return templates.get(intent)
+
+
 # Source tag mappings - Maps internal source values to display tags
 SOURCE_TAGS = {
     # Facebook sources
@@ -1039,6 +1197,63 @@ async def process_auto_reply(
             "capacity_suggestion": capacity_suggestion
         }
     
+    # ==================== SOLAR MITRA INTENT LAYER ====================
+    # Runs after menu-option detection (1-7), before the welcome message.
+    # Handles free-text Hinglish queries with fast template replies and
+    # always extracts + saves the bill amount to the CRM lead.
+
+    _smart_bill = extract_bill_smart(content)
+
+    # Persist bill to CRM whenever detected anywhere in the conversation
+    if _smart_bill:
+        _phone_sfx = phone[-10:] if len(phone) >= 10 else phone
+        _sys_info = estimate_solar_system(_smart_bill)
+        await db.crm_leads.update_one(
+            {"$or": [{"phone": phone}, {"phone": _phone_sfx}]},
+            {"$set": {
+                "monthly_bill": _smart_bill,
+                "suggested_capacity": _sys_info["size"],
+                "last_interaction": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+        logger.info(f"[SolarMitra] Bill ₹{_smart_bill} captured for {phone}")
+
+    # Use intent templates only AFTER the welcome menu has been sent
+    # (so the first-message welcome flow is preserved unchanged)
+    if has_welcome:
+        # ── Bill amount shared → highest-priority reply ──────────────────
+        if _smart_bill:
+            _sys = estimate_solar_system(_smart_bill)
+            _bill_reply = (
+                f"₹{_smart_bill:,} bill pe approx {_sys['size']} system lagega 👍\n"
+                f"Govt subsidy ₹{_sys['subsidy']} tak mil sakti hai.\n"
+                f"Aapka area kahan hai? Free site visit book karein?"
+            )
+            await tag_lead(phone, "bill_captured")
+            logger.info(f"[SolarMitra] Bill-intent reply for {phone}")
+            return {
+                "type": "intent_reply",
+                "detected_intent": "bill",
+                "bill_amount": _smart_bill,
+                "system_info": _sys,
+                "message": _bill_reply,
+                "language": language,
+            }
+
+        # ── Named solar intent → template reply ──────────────────────────
+        _solar_intent = detect_solar_intent(content)
+        if _solar_intent:
+            _tmpl = build_solar_intent_reply(_solar_intent)
+            if _tmpl:
+                await tag_lead(phone, f"intent_{_solar_intent}")
+                logger.info(f"[SolarMitra] Intent '{_solar_intent}' reply for {phone}")
+                return {
+                    "type": "intent_reply",
+                    "detected_intent": _solar_intent,
+                    "message": _tmpl,
+                    "language": language,
+                }
+
     # ==================== WELCOME MESSAGE LOGIC ====================
     # Send welcome only for:
     # 1. New conversations (no messages in 24h)
