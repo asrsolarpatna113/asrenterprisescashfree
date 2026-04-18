@@ -253,6 +253,12 @@ export const ProfessionalLeadsManagement = () => {
   const [selectedTemplate, setSelectedTemplate] = useState(null);
   const [waMessage, setWaMessage] = useState("");
   const [waSending, setWaSending] = useState(false);
+  const [skipAlreadyMessaged, setSkipAlreadyMessaged] = useState(true);
+
+  // Trash view state
+  const [showTrashView, setShowTrashView] = useState(false);
+  const [trashedLeads, setTrashedLeads] = useState([]);
+  const [trashLoading, setTrashLoading] = useState(false);
   
   // Payment state
   const [paymentData, setPaymentData] = useState({
@@ -369,6 +375,27 @@ export const ProfessionalLeadsManagement = () => {
     } catch (err) {
       console.error("Error fetching templates:", err);
     }
+  }, []);
+
+  const syncAndFetchTemplates = useCallback(async () => {
+    try {
+      await axios.post(`${API}/whatsapp/templates/sync`);
+      const res = await axios.get(`${API}/whatsapp/templates`);
+      setWaTemplates(res.data.templates || []);
+    } catch (err) {
+      console.error("Template sync error:", err);
+    }
+  }, []);
+
+  const fetchTrashedLeads = useCallback(async () => {
+    setTrashLoading(true);
+    try {
+      const res = await axios.get(`${API}/crm/leads/trash`);
+      setTrashedLeads(res.data.leads || []);
+    } catch (err) {
+      console.error("Error fetching trash:", err);
+    }
+    setTrashLoading(false);
   }, []);
 
   const sendWhatsAppMessage = async () => {
@@ -962,6 +989,14 @@ export const ProfessionalLeadsManagement = () => {
                 <span className="hidden sm:inline">Bulk Import</span>
               </button>
               <button
+                onClick={() => { setShowTrashView(true); fetchTrashedLeads(); }}
+                className="flex items-center gap-2 bg-gray-100 text-gray-600 px-3 py-2 rounded-lg font-medium hover:bg-red-50 hover:text-red-600 transition border border-gray-200"
+                title="View Trash"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span className="hidden sm:inline">Trash</span>
+              </button>
+              <button
                 onClick={() => setShowAddModal(true)}
                 className="flex items-center gap-2 bg-gradient-to-r from-green-500 to-emerald-600 text-white px-4 py-2 rounded-lg font-medium hover:from-green-600 hover:to-emerald-700 transition shadow-sm"
               >
@@ -1139,23 +1174,23 @@ export const ProfessionalLeadsManagement = () => {
               <div className="flex items-center gap-2 overflow-x-auto pb-1 -mx-1 px-1" style={{ WebkitOverflowScrolling: 'touch' }}>
                 {/* WhatsApp Bulk - Primary on Mobile */}
                 <button
-                  onClick={() => setShowBulkWhatsAppModal(true)}
+                  onClick={() => { setShowBulkWhatsAppModal(true); fetchWhatsAppTemplates(); }}
                   className="flex-shrink-0 flex items-center gap-1 px-3 py-2 bg-green-500 text-white rounded-lg text-xs sm:text-sm hover:bg-green-600 transition font-medium"
                 >
                   <MessageSquare className="w-4 h-4" />
-                  <span>WhatsApp</span>
+                  <span>Campaign</span>
                 </button>
                 <button
                   onClick={() => setShowAssignModal(true)}
                   className="flex-shrink-0 flex items-center gap-1 px-3 py-2 bg-purple-500 text-white rounded-lg text-xs sm:text-sm hover:bg-purple-600 transition"
                 >
                   <UserPlus className="w-4 h-4" />
-                  <span className="hidden sm:inline">Assign</span>
+                  <span>Assign</span>
                 </button>
                 <div className="relative group flex-shrink-0">
                   <button className="flex items-center gap-1 px-3 py-2 bg-cyan-500 text-white rounded-lg text-xs sm:text-sm hover:bg-cyan-600 transition">
                     <TrendingUp className="w-4 h-4" />
-                    <span className="hidden sm:inline">Stage</span>
+                    <span>Stage</span>
                     <ChevronDown className="w-3 h-3" />
                   </button>
                   <div className="absolute right-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg py-1 hidden group-hover:block z-20 min-w-[160px]">
@@ -1174,7 +1209,7 @@ export const ProfessionalLeadsManagement = () => {
                 <div className="relative group flex-shrink-0">
                   <button className="flex items-center gap-1 px-3 py-2 bg-orange-500 text-white rounded-lg text-xs sm:text-sm hover:bg-orange-600 transition">
                     <Flame className="w-4 h-4" />
-                    <span className="hidden sm:inline">Priority</span>
+                    <span>Priority</span>
                     <ChevronDown className="w-3 h-3" />
                   </button>
                   <div className="absolute right-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg py-1 hidden group-hover:block z-20 min-w-[140px]">
@@ -1195,7 +1230,7 @@ export const ProfessionalLeadsManagement = () => {
                   className="flex-shrink-0 flex items-center gap-1 px-3 py-2 bg-emerald-500 text-white rounded-lg text-xs sm:text-sm hover:bg-emerald-600 transition"
                 >
                   <Download className="w-4 h-4" />
-                  <span className="hidden sm:inline">Export</span>
+                  <span>Export</span>
                 </button>
                 <button
                   onClick={handleBulkDelete}
@@ -1203,7 +1238,7 @@ export const ProfessionalLeadsManagement = () => {
                   className="flex-shrink-0 flex items-center gap-1 px-3 py-2 bg-red-500 text-white rounded-lg text-xs sm:text-sm hover:bg-red-600 transition disabled:opacity-50"
                 >
                   <Trash2 className="w-4 h-4" />
-                  <span className="hidden sm:inline">Delete</span>
+                  <span>Delete</span>
                 </button>
               </div>
             </div>
@@ -1283,13 +1318,18 @@ export const ProfessionalLeadsManagement = () => {
                         <td className="px-3 py-3">
                           <div className="flex items-center gap-2">
                             <div>
-                              <div className="flex items-center gap-1.5">
+                              <div className="flex items-center gap-1.5 flex-wrap">
                                 <span className="font-medium text-slate-800 truncate max-w-[150px]">
                                   {lead.name || 'Unnamed Lead'}
                                 </span>
                                 {isFresh && (
                                   <span className="px-1.5 py-0.5 bg-green-500 text-white text-[10px] font-bold rounded animate-pulse">
                                     NEW
+                                  </span>
+                                )}
+                                {lead.templateSent && (
+                                  <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 text-[10px] font-bold rounded" title={`WA sent: ${lead.templateName || 'template'}`}>
+                                    📤 WA
                                   </span>
                                 )}
                               </div>
@@ -1763,7 +1803,7 @@ export const ProfessionalLeadsManagement = () => {
             <div className="p-6">
               <p className="text-slate-600 mb-4">Select a staff member to assign these leads:</p>
               <div className="space-y-2 max-h-60 overflow-y-auto">
-                {staffList.filter(s => s.is_active && s.staff_id !== "ASR1001" && s.role !== "owner" && s.role !== "super_admin").map(staff => (
+                {staffList.filter(s => s.is_active && !['ASR1001','ASR1002'].includes(s.staff_id) && s.role !== "owner" && s.role !== "super_admin" && !['ABHIJEET KUMAR','ANAMIKA'].includes(s.name?.toUpperCase?.())).map(staff => (
                   <button
                     key={staff.id}
                     onClick={() => handleBulkAssign(staff.id)}
@@ -2359,9 +2399,49 @@ export const ProfessionalLeadsManagement = () => {
                 </div>
               </div>
 
+              {/* Skip already messaged toggle */}
+              {(() => {
+                const alreadyCount = leads.filter(l => selectedLeadIds.includes(l.id) && l.templateSent).length;
+                const newCount = selectedLeadIds.length - alreadyCount;
+                return (
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-blue-800">Smart Campaign Filter</span>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={skipAlreadyMessaged}
+                          onChange={e => setSkipAlreadyMessaged(e.target.checked)}
+                          className="rounded"
+                        />
+                        <span className="text-xs text-blue-700">Skip already messaged</span>
+                      </label>
+                    </div>
+                    <div className="flex gap-3 text-xs">
+                      <span className="bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">
+                        {skipAlreadyMessaged ? newCount : selectedLeadIds.length} will receive
+                      </span>
+                      {alreadyCount > 0 && (
+                        <span className="bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
+                          {alreadyCount} already messaged {skipAlreadyMessaged ? '(skipped)' : '(will re-send)'}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+
               {/* Template Selection */}
               <div className="space-y-2">
-                <label className="block text-sm font-medium text-slate-700">Select Template</label>
+                <div className="flex items-center justify-between">
+                  <label className="block text-sm font-medium text-slate-700">Select Template</label>
+                  <button
+                    onClick={syncAndFetchTemplates}
+                    className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1"
+                  >
+                    <RefreshCw className="w-3 h-3" /> Auto-Sync from Meta
+                  </button>
+                </div>
                 <div className="space-y-2 max-h-48 overflow-y-auto">
                   {waTemplates.length > 0 ? waTemplates.map((template) => (
                     <div
@@ -2377,8 +2457,11 @@ export const ProfessionalLeadsManagement = () => {
                       <div className="text-xs text-slate-500 mt-1">{template.name}</div>
                     </div>
                   )) : (
-                    <div className="text-sm text-slate-500 text-center py-4">
-                      No templates available. Templates will be fetched from WhatsApp API.
+                    <div className="text-center py-4">
+                      <div className="text-sm text-slate-500 mb-2">No templates loaded yet.</div>
+                      <button onClick={syncAndFetchTemplates} className="text-xs bg-blue-500 text-white px-3 py-1.5 rounded-lg hover:bg-blue-600">
+                        Sync from Meta
+                      </button>
                     </div>
                   )}
                 </div>
@@ -2412,7 +2495,15 @@ export const ProfessionalLeadsManagement = () => {
                     }
                     setWaSending(true);
                     try {
-                      const selectedLeadsData = leads.filter(l => selectedLeadIds.includes(l.id));
+                      const allSelected = leads.filter(l => selectedLeadIds.includes(l.id));
+                      const selectedLeadsData = skipAlreadyMessaged
+                        ? allSelected.filter(l => !l.templateSent)
+                        : allSelected;
+                      if (selectedLeadsData.length === 0) {
+                        alert('No new leads to send to. All selected leads have already received a template.');
+                        setWaSending(false);
+                        return;
+                      }
                       let successCount = 0;
                       for (const lead of selectedLeadsData) {
                         try {
@@ -2700,6 +2791,94 @@ export const ProfessionalLeadsManagement = () => {
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ===== TRASH VIEW MODAL ===== */}
+      {showTrashView && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-3xl shadow-2xl max-h-[90vh] flex flex-col">
+            <div className="bg-gradient-to-r from-red-500 to-rose-600 px-6 py-4 flex items-center justify-between rounded-t-2xl">
+              <div>
+                <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                  <Trash2 className="w-5 h-5" />
+                  Trash — Deleted Leads
+                </h2>
+                <p className="text-red-100 text-xs mt-0.5">Leads are permanently deleted after 30 days</p>
+              </div>
+              <button
+                onClick={() => setShowTrashView(false)}
+                className="p-2 hover:bg-white/20 rounded-lg transition text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4">
+              {trashLoading ? (
+                <div className="flex items-center justify-center py-16">
+                  <Loader2 className="w-8 h-8 text-gray-300 animate-spin" />
+                </div>
+              ) : trashedLeads.length === 0 ? (
+                <div className="text-center py-16 text-gray-400">
+                  <Trash2 className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                  <p className="font-medium">Trash is empty</p>
+                  <p className="text-sm">Deleted leads will appear here for 30 days</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {trashedLeads.map(lead => {
+                    const deletedAt = lead.deleted_at ? new Date(lead.deleted_at) : null;
+                    const daysLeft = deletedAt
+                      ? Math.max(0, 30 - Math.floor((Date.now() - deletedAt.getTime()) / (1000 * 60 * 60 * 24)))
+                      : 30;
+                    return (
+                      <div
+                        key={lead.id}
+                        className="flex items-center justify-between p-3 bg-red-50 border border-red-100 rounded-xl"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-medium text-slate-800">{lead.name || 'Unnamed Lead'}</span>
+                            <span className="text-xs text-red-500 font-medium">
+                              {daysLeft > 0 ? `${daysLeft}d left` : 'Expires today'}
+                            </span>
+                          </div>
+                          <div className="text-xs text-slate-500 mt-0.5">
+                            {lead.phone} · {lead.district || 'N/A'} · Deleted: {deletedAt ? deletedAt.toLocaleDateString('en-IN') : 'Unknown'}
+                          </div>
+                        </div>
+                        <button
+                          onClick={async () => {
+                            try {
+                              await axios.post(`${API}/crm/leads/restore`, { lead_ids: [lead.id] });
+                              setTrashedLeads(prev => prev.filter(l => l.id !== lead.id));
+                              fetchLeads();
+                            } catch {
+                              alert('Failed to restore lead');
+                            }
+                          }}
+                          className="ml-3 flex-shrink-0 px-3 py-1.5 bg-green-500 text-white text-xs rounded-lg hover:bg-green-600 transition font-medium flex items-center gap-1"
+                        >
+                          <RefreshCw className="w-3 h-3" /> Restore
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="border-t border-gray-100 px-6 py-3 flex items-center justify-between bg-gray-50 rounded-b-2xl">
+              <span className="text-xs text-gray-500">{trashedLeads.length} deleted lead(s)</span>
+              <button
+                onClick={fetchTrashedLeads}
+                className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1"
+              >
+                <RefreshCw className="w-3 h-3" /> Refresh
+              </button>
+            </div>
           </div>
         </div>
       )}

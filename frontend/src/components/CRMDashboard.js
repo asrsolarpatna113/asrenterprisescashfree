@@ -2498,7 +2498,7 @@ export const CRMDashboard = () => {
                 >
                   Unassigned ({leads.filter(l => !l.assigned_to).length})
                 </button>
-                {staffAccounts.filter(s => s.is_active).map((staff) => (
+                {staffAccounts.filter(s => s.is_active && !['ASR1001','ASR1002'].includes(s.staff_id) && !['ABHIJEET KUMAR','ANAMIKA'].includes(s.name?.toUpperCase?.())).map((staff) => (
                   <button
                     key={staff.id}
                     onClick={() => setSelectedStaffFilter(staff.id)}
