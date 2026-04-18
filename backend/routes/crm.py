@@ -887,7 +887,7 @@ async def get_leaderboard():
 @router.get("/leads/advanced")
 async def get_leads_advanced(
     page: int = 1,
-    limit: int = 50,
+    limit: int = 250,
     search: str = None,
     source: str = None,
     stage: str = None,

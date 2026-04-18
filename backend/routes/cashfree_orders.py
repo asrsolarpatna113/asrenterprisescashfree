@@ -26,12 +26,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/cashfree", tags=["Cashfree Orders"])
 
-# MongoDB connection
-MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
-DB_NAME = os.environ.get("DB_NAME", "test_database")
-# Use the process-wide shared client so writes from this module are visible
-# to every other route (e.g. CRM "Cashfree Payments" view reading db.payments).
-db = get_db(DB_NAME)
+# MongoDB connection - uses EFFECTIVE_DB_NAME from db_client (Atlas-aware)
+# Shared client so writes are visible across all routes (e.g. CRM Cashfree Payments view).
+db = get_db()
 client = db.client
 
 # ==================== CONSTANTS ====================

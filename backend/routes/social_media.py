@@ -18,11 +18,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/social", tags=["Social Media"])
 
-# Database connection
-MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
-DB_NAME = os.environ.get("DB_NAME", "test_database")
+# Database connection - uses EFFECTIVE_DB_NAME from db_client (Atlas-aware)
 from db_client import get_db
-db = get_db(DB_NAME)
+db = get_db()
 client = db.client
 
 # Facebook Graph API - Use v19.0 for latest features

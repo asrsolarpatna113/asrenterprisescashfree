@@ -24,6 +24,15 @@ ASR Enterprises is a full-stack web application with a Create React App frontend
 - Run command starts FastAPI on `0.0.0.0:${PORT:-5000}` and serves the compiled React app from `frontend/build`.
 - Frontend production dependencies were aligned for normal npm install: React 18, React DOM 18, date-fns 3, ESLint 8, AJV 8.
 - The public website theme uses a premium light solar palette with sunlit gold, solar-glass blue, emerald CTA accents, and visible solar-panel grid/array effects on the homepage hero and zero-bill section.
+## April 18, 2026 — Critical DB Routing Fix + Campaign/Pagination (Session 5)
+
+### Root Cause Fixed: All Routes Pointing to Wrong Database
+- **Bug**: `whatsapp.py`, `social_media.py`, `cashfree_orders.py`, `payments.py`, `whatsapp_automation.py` all had `DB_NAME = os.environ.get("DB_NAME", "test_database")` — defaulting to a nonexistent `test_database` instead of the Atlas `asr_crm` database. This caused "No valid leads found" on every campaign attempt in production.
+- **Fix**: Changed all 5 route files from `db = get_db(DB_NAME)` to `db = get_db()` which auto-uses `EFFECTIVE_DB_NAME` from `db_client.py` (correctly resolves to `asr_crm` when Atlas URI is set).
+- **Pagination**: Backend `/leads/advanced` default changed from 50 to 250 to match frontend. All endpoints now consistently return 250 leads per page.
+- **Trash/Bin**: Confirmed working — `GET /api/crm/leads/trash`, `POST /api/crm/leads/restore`, `POST /api/crm/leads/bulk-delete` (soft delete with 30-day TTL) all functional. Frontend shows Trash section under Lead Management tab.
+- **5366 leads confirmed safe**: All bulk-imported leads are in Atlas `asr_crm.crm_leads` with proper UUID `id` fields.
+
 ## April 18, 2026 — Solar Mitra Complete AI Bot (Session 3)
 
 ### Architecture: Full Solar Mitra Intent Engine

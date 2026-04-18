@@ -21,10 +21,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/payments", tags=["Payments"])
 
-# MongoDB connection
-MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
-DB_NAME = os.environ.get("DB_NAME", "test_database")
-db = get_db(DB_NAME)
+# MongoDB connection - uses EFFECTIVE_DB_NAME from db_client (Atlas-aware)
+db = get_db()
 client = db.client
 
 # ==================== CONSTANTS ====================
