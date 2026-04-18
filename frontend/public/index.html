@@ -393,16 +393,15 @@
                     window.otpVerificationStatus = 'failed';
                     window.otpVerificationError = error;
                     
-                    // Dispatch failure event for React components
+                    // Dispatch failure event for React components to handle inline
                     window.dispatchEvent(new CustomEvent('msg91OtpFailed', { detail: error }));
                     
                     // Clear pending login data
                     window.pendingLoginMobile = '';
                     window.pendingLoginType = '';
-                    
-                    // Show user-friendly error
-                    const errorMsg = error?.message || error?.error || "OTP verification failed";
-                    alert(errorMsg + ". Please try again.");
+                    // NOTE: Do NOT call alert() here — the React components handle
+                    // the msg91OtpFailed event and show errors inline without
+                    // disruptive native browser dialogs.
                 },
                 VAR1: "OTP"
             };

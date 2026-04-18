@@ -2226,12 +2226,20 @@ export const CRMDashboard = () => {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl p-5 text-white">
                 <ClipboardList className="w-8 h-8 mb-2 opacity-80" />
-                <div className="text-3xl font-bold">{dashboardData.total_leads || leads.length || 0}</div>
+                <div className="text-3xl font-bold">
+                  {loading
+                    ? <span className="inline-block w-8 h-8 border-4 border-white/40 border-t-white rounded-full animate-spin" />
+                    : (dashboardData.total_leads || leads.length || 0)}
+                </div>
                 <div className="text-blue-100 text-sm">Total Leads</div>
               </div>
               <div className="bg-gradient-to-br from-green-500 to-green-600 rounded-xl p-5 text-white">
                 <CheckCircle className="w-8 h-8 mb-2 opacity-80" />
-                <div className="text-3xl font-bold">{dashboardData.pipeline_stats?.completed || leads.filter(l => l.stage === 'completed').length || 0}</div>
+                <div className="text-3xl font-bold">
+                  {loading
+                    ? <span className="inline-block w-8 h-8 border-4 border-white/40 border-t-white rounded-full animate-spin" />
+                    : (dashboardData.pipeline_stats?.completed || leads.filter(l => l.stage === 'completed').length || 0)}
+                </div>
                 <div className="text-green-100 text-sm">Completed</div>
               </div>
               <div className="bg-gradient-to-br from-amber-500 to-orange-500 rounded-xl p-5 text-white">

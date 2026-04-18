@@ -78,8 +78,8 @@ export const LoginSelector = () => {
         </div>
 
         <p className="text-center text-xs text-slate-400 mt-8">
-          Need help? Call us at{" "}
-          <a href="tel:8877896889" className="text-[#0369A1] font-semibold hover:underline">8877896889</a>
+          Need help? Contact Us at{" "}
+          <a href="mailto:support@asrenterprises.in" className="text-[#0369A1] font-semibold hover:underline">support@asrenterprises.in</a>
         </p>
       </div>
     </div>

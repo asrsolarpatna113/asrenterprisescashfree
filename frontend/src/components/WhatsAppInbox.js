@@ -249,6 +249,50 @@ const ChatBubble = ({ message, selectionMode, isSelected, onToggleSelect, onDele
   );
 };
 
+// Collapsible variables panel — hidden by default to preserve chat space on mobile
+const VariablesPanel = ({ count, variables, onVariablesChange }) => {
+  const [open, setOpen] = useState(false);
+  const filled = variables.filter(v => v && v.trim()).length;
+  return (
+    <div className="mt-2">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="flex items-center gap-2 text-xs text-gray-500 hover:text-green-700 transition py-1"
+      >
+        <ChevronDown className={`w-3.5 h-3.5 transition ${open ? 'rotate-180' : ''}`} />
+        <span>
+          {open ? 'Hide' : 'Fill'} template variables
+          {filled > 0 && !open && (
+            <span className="ml-1 text-green-600 font-medium">({filled}/{count} filled)</span>
+          )}
+          {filled === 0 && !open && (
+            <span className="ml-1 text-amber-500">(optional)</span>
+          )}
+        </span>
+      </button>
+      {open && (
+        <div className="mt-1 grid grid-cols-2 gap-1.5">
+          {Array(count).fill(0).map((_, idx) => (
+            <input
+              key={idx}
+              type="text"
+              placeholder={`Var ${idx + 1}`}
+              value={variables[idx] || ''}
+              onChange={(e) => {
+                const newVars = [...variables];
+                newVars[idx] = e.target.value;
+                onVariablesChange(newVars);
+              }}
+              className="px-2.5 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-xs focus:ring-1 focus:ring-green-500 focus:border-transparent"
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // Template Selector Component
 const TemplateSelector = ({ templates, selectedTemplate, onSelect, variables, onVariablesChange }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -303,24 +347,13 @@ const TemplateSelector = ({ templates, selectedTemplate, onSelect, variables, on
         </div>
       )}
       
-      {/* Variables input */}
+      {/* Variables input — collapsed by default to save screen space */}
       {selected?.has_variables && selected?.variable_count > 0 && (
-        <div className="mt-3 space-y-2">
-          {Array(selected.variable_count).fill(0).map((_, idx) => (
-            <input
-              key={idx}
-              type="text"
-              placeholder={`Variable ${idx + 1} (e.g., customer name)`}
-              value={variables[idx] || ''}
-              onChange={(e) => {
-                const newVars = [...variables];
-                newVars[idx] = e.target.value;
-                onVariablesChange(newVars);
-              }}
-              className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-green-500 focus:border-transparent"
-            />
-          ))}
-        </div>
+        <VariablesPanel
+          count={selected.variable_count}
+          variables={variables}
+          onVariablesChange={onVariablesChange}
+        />
       )}
     </div>
   );

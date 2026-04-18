@@ -187,7 +187,7 @@ export const SolarAdvisorLogin = () => {
 
           <div className="mt-6 pt-6 border-t border-gray-100 text-center text-sm">
             <span className="text-gray-600">Not yet a Solar Advisor? </span>
-            <Link to="/agent-register" className="text-purple-600 hover:text-purple-800 font-semibold">
+            <Link to="/become-agent" className="text-purple-600 hover:text-purple-800 font-semibold">
               Register Now
             </Link>
           </div>
