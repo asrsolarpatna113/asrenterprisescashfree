@@ -2783,7 +2783,8 @@ export default function App() {
           {/* Order Tracking */}
           <Route path="/track-order" element={<Suspense fallback={<PageLoader />}><OrderTracking /></Suspense>} />
 
-          {/* Admin Login */}
+          {/* Admin Login - redirect /admin to /admin/login */}
+          <Route path="/admin" element={<Navigate to="/admin/login" replace />} />
           <Route path="/admin/login" element={<AdminLogin onLogin={handleLogin} />} />
           
           {/* Customer Portal Routes */}

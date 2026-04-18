@@ -824,12 +824,14 @@ async def send_text_message(
         Dict with success status and message details
     """
     import httpx
-    
-    settings = await db.whatsapp_settings.find_one({}, {"_id": 0})
+    # Use the central settings loader that merges env vars (WHATSAPP_ACCESS_TOKEN,
+    # WHATSAPP_PHONE_NUMBER_ID) with any DB overrides — env always wins.
+    from routes.whatsapp import get_whatsapp_settings
+    settings = await get_whatsapp_settings()
     if not settings or not settings.get("access_token"):
-        logger.error("WhatsApp API not configured")
+        logger.error("WhatsApp API not configured (check WHATSAPP_ACCESS_TOKEN + WHATSAPP_PHONE_NUMBER_ID env vars)")
         return {"success": False, "error": "WhatsApp API not configured"}
-    
+
     access_token = settings["access_token"]
     phone_number_id = settings["phone_number_id"]
     

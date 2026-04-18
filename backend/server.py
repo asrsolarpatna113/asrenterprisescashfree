@@ -9275,35 +9275,38 @@ async def confirm_import_leads(data: Dict[str, Any]):
 
 @api_router.post("/crm/leads/bulk-delete")
 async def bulk_delete_leads(data: Dict[str, Any]):
-    """Delete multiple leads at once"""
+    """Soft-delete multiple leads (moves to Leads Bin, 30-day retention)"""
+    from datetime import datetime, timezone
     try:
         lead_ids = data.get('lead_ids', [])
         if not lead_ids:
             raise HTTPException(status_code=400, detail="No lead IDs provided")
-        
+
+        now = datetime.now(timezone.utc).isoformat()
         deleted_count = 0
         errors = []
-        
+
         for lead_id in lead_ids:
             try:
-                result = await db.crm_leads.delete_one({"id": lead_id})
-                if result.deleted_count > 0:
+                result = await db.crm_leads.update_one(
+                    {"id": lead_id},
+                    {"$set": {"is_deleted": True, "deleted_at": now}}
+                )
+                if result.modified_count > 0:
                     deleted_count += 1
-                    # Also delete from leads collection if exists
-                    await db.leads.delete_one({"id": lead_id})
             except Exception as e:
                 errors.append({"id": lead_id, "error": str(e)})
-        
-        logger.info(f"Bulk delete: {deleted_count} leads deleted, {len(errors)} errors")
-        
+
+        logger.info(f"Bulk soft-delete: {deleted_count} leads moved to bin, {len(errors)} errors")
+
         return {
             "success": True,
             "deleted_count": deleted_count,
             "error_count": len(errors),
             "errors": errors[:10],
-            "message": f"Successfully deleted {deleted_count} leads" + (f", {len(errors)} errors" if errors else "")
+            "message": f"Successfully moved {deleted_count} leads to Leads Bin" + (f", {len(errors)} errors" if errors else "")
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -11331,16 +11334,16 @@ async def admin_update_lead(lead_id: str, data: Dict[str, Any]):
 
 @api_router.delete("/admin/leads/{lead_id}")
 async def admin_delete_lead(lead_id: str):
-    """Admin delete lead - removes from both collections"""
+    """Admin soft-delete lead - moves to Leads Bin (30-day retention, restorable)"""
+    from datetime import datetime, timezone
     try:
-        # Delete from leads collection
-        await db.leads.delete_one({"id": lead_id})
-        
-        # Delete from crm_leads collection
-        await db.crm_leads.delete_one({"id": lead_id})
-        
-        logger.info(f"Lead {lead_id} deleted by admin")
-        return {"success": True, "message": "Lead deleted successfully"}
+        now = datetime.now(timezone.utc).isoformat()
+        await db.crm_leads.update_one(
+            {"id": lead_id},
+            {"$set": {"is_deleted": True, "deleted_at": now}}
+        )
+        logger.info(f"Lead {lead_id} soft-deleted by admin (moved to Leads Bin)")
+        return {"success": True, "message": "Lead moved to Leads Bin (restorable for 30 days)"}
     except Exception as e:
         logger.error(f"Error deleting lead: {e}")
         raise HTTPException(status_code=500, detail=str(e))

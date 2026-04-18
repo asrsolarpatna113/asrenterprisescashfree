@@ -270,19 +270,19 @@ async def update_lead_on_payment(lead_id: str, payment_status: str, amount: floa
 async def send_payment_link_via_whatsapp(phone: str, customer_name: str, amount: float, payment_link: str, purpose: str):
     """Send payment link via WhatsApp API"""
     try:
-        # Get WhatsApp settings
-        wa_settings = await db.whatsapp_settings.find_one({}, {"_id": 0})
+        from routes.whatsapp import get_whatsapp_settings
+        wa_settings = await get_whatsapp_settings()
         if not wa_settings or not wa_settings.get("access_token"):
             logger.warning("WhatsApp not configured, skipping WA notification")
             return False
-        
+
         cleaned_phone = clean_phone_number(phone)
         if not cleaned_phone:
             return False
-        
+
         access_token = wa_settings.get("access_token")
         phone_number_id = wa_settings.get("phone_number_id")
-        
+
         if not access_token or not phone_number_id:
             logger.warning("WhatsApp credentials incomplete")
             return False
@@ -397,8 +397,9 @@ async def get_payment_system_status():
     """Get overall payment system status for dashboard"""
     settings = await get_cashfree_settings()
     
-    # Get WhatsApp status
-    wa_settings = await db.whatsapp_settings.find_one({}, {"_id": 0})
+    # Get WhatsApp status (env vars take priority over DB)
+    from routes.whatsapp import get_whatsapp_settings
+    wa_settings = await get_whatsapp_settings()
     wa_configured = bool(wa_settings and wa_settings.get("access_token"))
     
     # Get today's stats
@@ -836,8 +837,8 @@ async def cancel_payment_link(link_id: str):
 async def send_payment_confirmation_whatsapp(payment: Dict):
     """Send WhatsApp confirmation message after successful payment"""
     try:
-        # Get WhatsApp settings
-        wa_settings = await db.whatsapp_settings.find_one({}, {"_id": 0})
+        from routes.whatsapp import get_whatsapp_settings
+        wa_settings = await get_whatsapp_settings()
         if not wa_settings or not wa_settings.get("access_token"):
             logger.warning("WhatsApp not configured, skipping payment confirmation")
             return False
