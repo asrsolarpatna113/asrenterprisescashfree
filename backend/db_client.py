@@ -27,35 +27,68 @@ logger = logging.getLogger(__name__)
 
 MONGO_URI = os.environ.get("MONGO_URI", "").strip()
 
+# Auto-correct a known one-character typo in the Atlas cluster hostname.
+# The correct cluster ID is "ltbwwrm" (two w's); "ltbwmrm" (one w) is wrong.
+if "ltbwmrm.mongodb.net" in MONGO_URI:
+    MONGO_URI = MONGO_URI.replace("ltbwmrm.mongodb.net", "ltbwwrm.mongodb.net")
+    logger.info("[db] Auto-corrected Atlas hostname typo: ltbwmrm → ltbwwrm")
+
 # We test DNS before committing to Atlas mode so we can fall back gracefully.
 _atlas_reachable = False
 
-def _test_atlas_dns(uri: str) -> bool:
-    """Return True if the hostname in the SRV URI resolves in DNS."""
+def _patch_dns_for_atlas():
+    """Force dnspython (used by pymongo for SRV resolution) to use Google's
+    public DNS servers (8.8.8.8 / 8.8.4.4).  Replit's default system resolver
+    sometimes fails to resolve MongoDB Atlas SRV records even when they exist
+    globally.  This ensures Atlas connections work reliably.
+    """
     try:
-        # Extract hostname from mongodb+srv://user:pass@HOST/db?...
+        import dns.resolver as _dns_resolver
+        resolver = _dns_resolver.Resolver(configure=False)
+        resolver.nameservers = ["8.8.8.8", "8.8.4.4"]
+        resolver.lifetime = 10
+        resolver.timeout = 5
+        _dns_resolver.default_resolver = resolver
+        logger.info("[db] DNS patched to use Google public resolvers (8.8.8.8 / 8.8.4.4)")
+        return True
+    except Exception as exc:
+        logger.warning(f"[db] DNS patch failed (non-fatal): {exc}")
+        return False
+
+
+def _test_atlas_dns(uri: str) -> bool:
+    """Return True if the Atlas SRV record resolves via Google DNS."""
+    try:
+        import dns.resolver as _dns_resolver
         m = re.search(r"mongodb(?:\+srv)?://[^@]+@([^/:?]+)", uri)
         if not m:
             return False
         host = m.group(1)
-        # Try standard DNS resolution with a 5-second timeout
-        socket.setdefaulttimeout(5)
-        socket.getaddrinfo(host, None)
+        srv_name = f"_mongodb._tcp.{host}"
+        # Use Google's DNS directly — Replit's system resolver may not resolve Atlas
+        resolver = _dns_resolver.Resolver(configure=False)
+        resolver.nameservers = ["8.8.8.8", "8.8.4.4"]
+        resolver.lifetime = 10
+        resolver.timeout = 5
+        resolver.resolve(srv_name, "SRV")
+        logger.info(f"[db] Atlas SRV DNS resolved successfully for {host}")
         return True
     except Exception as exc:
         logger.warning(f"[db] Atlas DNS check failed for URI hostname: {exc}")
         return False
 
+
 if MONGO_URI:
     _atlas_reachable = _test_atlas_dns(MONGO_URI)
     if _atlas_reachable:
         USE_IN_MEMORY = False
-        logger.info("[db] MONGO_URI set and hostname resolves — using MongoDB Atlas (persistent)")
+        # Patch dnspython so pymongo's own SRV lookup also uses Google DNS
+        _patch_dns_for_atlas()
+        logger.info("[db] MONGO_URI set and SRV resolves — using MongoDB Atlas (persistent)")
     else:
         USE_IN_MEMORY = True
         logger.error(
-            "[db] MONGO_URI is set but Atlas hostname does NOT resolve in DNS. "
-            "Possible causes: cluster hostname is wrong, or DNS hasn't propagated yet. "
+            "[db] MONGO_URI is set but Atlas SRV DNS does NOT resolve. "
             "Falling back to in-memory mode. Data will NOT persist across restarts."
         )
 else:
@@ -130,9 +163,37 @@ def get_client():
     return _shared_client
 
 
+def _extract_db_name_from_uri(uri: str) -> str:
+    """Extract the database name from a MongoDB URI path, e.g. /asr_crm → 'asr_crm'."""
+    try:
+        m = re.search(r"mongodb(?:\+srv)?://[^/]+/([^?]+)", uri)
+        if m:
+            name = m.group(1).strip()
+            if name:
+                return name
+    except Exception:
+        pass
+    return ""
+
+
+# Compute a canonical DB name: prefer the DB name embedded in MONGO_URI (when
+# using Atlas), then the DB_NAME env var, then the hard-coded fallback.
+if MONGO_URI and not USE_IN_MEMORY:
+    _uri_db = _extract_db_name_from_uri(MONGO_URI)
+    EFFECTIVE_DB_NAME = _uri_db or os.environ.get("DB_NAME", "asr_crm")
+else:
+    EFFECTIVE_DB_NAME = os.environ.get("DB_NAME", "asr_dev")
+
+logger.info(f"[db] Effective database name: {EFFECTIVE_DB_NAME}")
+
+
 def get_db(db_name: str = None):
-    """Return a shared database handle keyed by db_name."""
-    name = db_name or os.environ.get("DB_NAME", "asr_dev")
+    """Return a shared database handle keyed by db_name.
+
+    When db_name is omitted the EFFECTIVE_DB_NAME (derived from MONGO_URI or
+    the DB_NAME env var) is used so callers don't need to pass a name.
+    """
+    name = db_name or EFFECTIVE_DB_NAME
     if name not in _shared_dbs:
         _shared_dbs[name] = get_client()[name]
     return _shared_dbs[name]

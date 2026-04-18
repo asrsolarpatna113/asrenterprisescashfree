@@ -406,10 +406,10 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         return response
 
 # MongoDB connection
-mongo_url = os.environ['MONGO_URL']
-from db_client import get_client as _get_shared_client, get_db as _get_shared_db
+mongo_url = os.environ.get('MONGO_URL', 'mongodb://127.0.0.1:27017')
+from db_client import get_client as _get_shared_client, get_db as _get_shared_db, EFFECTIVE_DB_NAME as _DB_NAME
 client = _get_shared_client()
-db = _get_shared_db(os.environ['DB_NAME'])
+db = _get_shared_db()  # uses EFFECTIVE_DB_NAME automatically
 
 # ==================== PERFORMANCE OPTIMIZATION ====================
 
@@ -646,7 +646,7 @@ async def startup_event():
 
     # Restore in-memory database from disk snapshot (no-op when using real Mongo)
     try:
-        await load_snapshot(client, os.environ['DB_NAME'])
+        await load_snapshot(client, _DB_NAME)
     except Exception as e:
         logger.warning(f"snapshot restore skipped: {e}")
 
@@ -670,7 +670,7 @@ async def startup_event():
     # Start periodic disk snapshot for in-memory mongo so newly added staff /
     # leads / etc. survive across workflow restarts.
     try:
-        asyncio.create_task(periodic_snapshot(client, os.environ['DB_NAME'], interval=15))
+        asyncio.create_task(periodic_snapshot(client, _DB_NAME, interval=15))
     except Exception as e:
         logger.warning(f"periodic snapshot task not started: {e}")
 
@@ -841,7 +841,7 @@ async def shutdown_event():
 
     # Final disk snapshot so the latest writes survive the restart
     try:
-        await save_snapshot(client, os.environ['DB_NAME'])
+        await save_snapshot(client, _DB_NAME)
     except Exception as e:
         logger.warning(f"final snapshot save failed: {e}")
 
@@ -8869,7 +8869,7 @@ async def bulk_import_leads_manual(data: dict):
 
         if imported:
             try:
-                await save_snapshot(client, os.environ.get('DB_NAME', 'asr_dev'))
+                await save_snapshot(client, _DB_NAME)
                 logger.info(f"[snapshot] Saved after manual import of {len(imported)} leads")
             except Exception as _snap_err:
                 logger.warning(f"[snapshot] Post-import save failed: {_snap_err}")
@@ -9299,7 +9299,7 @@ async def confirm_import_leads(data: Dict[str, Any]):
         # Immediately persist to snapshot so data survives a restart
         if imported:
             try:
-                await save_snapshot(client, os.environ.get('DB_NAME', 'asr_dev'))
+                await save_snapshot(client, _DB_NAME)
                 logger.info(f"[snapshot] Saved after import of {len(imported)} leads")
             except Exception as _snap_err:
                 logger.warning(f"[snapshot] Post-import save failed: {_snap_err}")
@@ -9373,7 +9373,7 @@ async def delete_all_leads(request: Request):
     try:
         result = await db.crm_leads.delete_many({})
         deleted = result.deleted_count
-        await save_snapshot(client, os.environ.get('DB_NAME', 'asr_dev'))
+        await save_snapshot(client, _DB_NAME)
         logger.warning(f"[ADMIN] ALL leads deleted: {deleted} records removed")
         return {
             "success": True,
