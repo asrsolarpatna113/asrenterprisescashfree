@@ -2620,7 +2620,7 @@ export const CRMDashboard = () => {
                       <td className="px-4 py-3">
                         <select value={lead.assigned_to || ''} onChange={(e) => { if(e.target.value) assignLeadToStaff(lead.id, e.target.value); }} className="bg-gray-50 border border-gray-300 text-[#0a355e] text-sm px-2 py-1 rounded">
                           <option value="">Assign Staff</option>
-                          {staffAccounts.map((s) => (<option key={s.id} value={s.id}>{s.name} ({s.staff_id})</option>))}
+                          {staffAccounts.filter(s => !['ASR1001','ASR1002'].includes(s.staff_id) && !['ABHIJEET KUMAR','ANAMIKA'].includes(s.name?.toUpperCase?.())).map((s) => (<option key={s.id} value={s.id}>{s.name} ({s.staff_id})</option>))}
                         </select>
                       </td>
                       <td className="px-4 py-3">
@@ -4447,7 +4447,7 @@ export const CRMDashboard = () => {
                 className="w-full bg-gray-50 border border-gray-300 text-[#0a355e] px-4 py-3 rounded-xl focus:ring-2 focus:ring-purple-500 focus:outline-none"
               >
                 <option value="">-- Select Staff --</option>
-                {staffAccounts.filter(s => s.is_active).map((staff) => (
+                {staffAccounts.filter(s => s.is_active && !['ASR1001','ASR1002'].includes(s.staff_id) && !['ABHIJEET KUMAR','ANAMIKA'].includes(s.name?.toUpperCase?.())).map((staff) => (
                   <option key={staff.id} value={staff.id}>
                     {staff.name} ({staff.staff_id}) - {staff.leads_assigned || 0} leads
                   </option>

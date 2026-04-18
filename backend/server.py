@@ -1031,7 +1031,7 @@ async def perform_cleanup(deep_clean: bool = False):
         whatsapp_cutoff = (now - timedelta(hours=24)).isoformat()
         try:
             wa_msgs_result = await db.whatsapp_messages.delete_many({
-                "timestamp": {"$lt": whatsapp_cutoff}
+                "created_at": {"$lt": whatsapp_cutoff}
             })
             cleanup_results["old_whatsapp_messages_deleted"] = wa_msgs_result.deleted_count
         except Exception as _wae:
@@ -5721,14 +5721,24 @@ async def auto_assign_lead(lead_id: str):
     if lead.get("assigned_to"):
         return {"success": False, "message": "Lead already assigned"}
     
-    # Get all active staff
+    # Staff IDs excluded from lead allotment (owners / admin only accounts)
+    _ALLOTMENT_EXCLUDED_IDS = {"ASR1001", "ASR1002"}
+    _ALLOTMENT_EXCLUDED_NAMES = {"ABHIJEET KUMAR", "ANAMIKA"}
+
+    # Get all active staff excluding owners and specific non-field staff
     active_staff = await db.crm_staff_accounts.find(
         {"is_active": True},
         {"_id": 0}
     ).to_list(100)
+
+    active_staff = [
+        s for s in active_staff
+        if s.get("staff_id") not in _ALLOTMENT_EXCLUDED_IDS
+        and s.get("name", "").upper().strip() not in _ALLOTMENT_EXCLUDED_NAMES
+    ]
     
     if not active_staff:
-        return {"success": False, "message": "No active staff available"}
+        return {"success": False, "message": "No active field staff available for assignment"}
     
     lead_district = lead.get("district", "").lower()
     assigned_staff = None
@@ -8828,6 +8838,13 @@ async def bulk_import_leads_manual(data: dict):
             imported.extend([{"name": l["name"], "phone": l["phone"][-10:], "id": l["id"]} for l in batch_leads])
         
         logger.info(f"Manual bulk import: {len(imported)} leads imported, {len(duplicates)} duplicates, {len(errors)} errors")
+
+        if imported:
+            try:
+                await save_snapshot(client, os.environ.get('DB_NAME', 'asr_dev'))
+                logger.info(f"[snapshot] Saved after manual import of {len(imported)} leads")
+            except Exception as _snap_err:
+                logger.warning(f"[snapshot] Post-import save failed: {_snap_err}")
         
         return {
             "success": True,
@@ -9250,6 +9267,14 @@ async def confirm_import_leads(data: Dict[str, Any]):
                 errors.append({"index": idx, "error": str(e)})
         
         logger.info(f"Smart import confirmed: {len(imported)} leads imported ({residential_count} Residential, {commercial_count} Commercial), {len(duplicates)} duplicates, {len(errors)} errors")
+
+        # Immediately persist to snapshot so data survives a restart
+        if imported:
+            try:
+                await save_snapshot(client, os.environ.get('DB_NAME', 'asr_dev'))
+                logger.info(f"[snapshot] Saved after import of {len(imported)} leads")
+            except Exception as _snap_err:
+                logger.warning(f"[snapshot] Post-import save failed: {_snap_err}")
         
         return {
             "success": True,
@@ -9312,6 +9337,24 @@ async def bulk_delete_leads(data: Dict[str, Any]):
     except Exception as e:
         logger.error(f"Bulk delete error: {e}")
         raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
+
+
+@api_router.delete("/crm/leads/delete-all")
+async def delete_all_leads(request: Request):
+    """Permanently delete ALL leads from the database (admin clean-slate operation)"""
+    try:
+        result = await db.crm_leads.delete_many({})
+        deleted = result.deleted_count
+        await save_snapshot(client, os.environ.get('DB_NAME', 'asr_dev'))
+        logger.warning(f"[ADMIN] ALL leads deleted: {deleted} records removed")
+        return {
+            "success": True,
+            "deleted_count": deleted,
+            "message": f"All {deleted} leads permanently deleted. Database is now clean."
+        }
+    except Exception as e:
+        logger.error(f"Delete-all-leads error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete leads: {str(e)}")
 
 
 def extract_lead_from_row(row: dict) -> dict:

@@ -263,6 +263,21 @@ export const LeadsManagement = () => {
     }
   };
 
+  const handleDeleteAllLeads = async () => {
+    const confirm1 = window.confirm("WARNING: This will permanently delete ALL leads from the database. This cannot be undone!\n\nClick OK to continue.");
+    if (!confirm1) return;
+    const confirm2 = window.confirm("Are you absolutely sure? ALL leads will be wiped. Type OK to confirm.");
+    if (!confirm2) return;
+    try {
+      const res = await axios.delete(`${API}/crm/leads/delete-all`);
+      alert(`Done! ${res.data.deleted_count} leads deleted. Database is now clean.`);
+      setLeads([]);
+      setSelectedLeadIds([]);
+    } catch (err) {
+      alert(err.response?.data?.detail || "Failed to delete all leads");
+    }
+  };
+
   const handleBulkDelete = async () => {
     if (selectedLeadIds.length === 0) {
       alert("Please select leads to delete");
@@ -432,6 +447,15 @@ export const LeadsManagement = () => {
               data-testid="refresh-leads-btn"
             >
               <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
+            </button>
+            <button
+              onClick={handleDeleteAllLeads}
+              className="bg-gradient-to-r from-red-500 to-red-600 text-white px-4 py-2 rounded-lg flex items-center space-x-2 hover:from-red-600 hover:to-red-700 shadow-lg ml-auto"
+              data-testid="delete-all-leads-btn"
+              title="Delete all leads (clean slate)"
+            >
+              <Trash2 className="w-5 h-5" />
+              <span className="hidden sm:inline">Delete All</span>
             </button>
           </div>
         </div>
