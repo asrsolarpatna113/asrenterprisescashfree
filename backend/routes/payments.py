@@ -1244,23 +1244,31 @@ async def get_transactions(
     lead_id: Optional[str] = None,
     search: Optional[str] = None,
     from_date: Optional[str] = None,
-    to_date: Optional[str] = None
+    to_date: Optional[str] = None,
+    verified_only: Optional[bool] = None,
 ):
-    """Get paginated list of payment transactions"""
-    query = {}
-    
+    """Get paginated list of payment transactions.
+
+    By default excludes soft-deleted records (`is_deleted != true`).
+    Pass `verified_only=true` to show only API-confirmed payments.
+    """
+    # Always exclude soft-deleted records — they should never appear in CRM
+    query: dict = {"is_deleted": {"$ne": True}}
+
     if status:
         query["status"] = status
     if source:
         query["source"] = source
     if lead_id:
         query["lead_id"] = lead_id
+    if verified_only is True:
+        query["is_verified"] = True
     if search:
         query["$or"] = [
             {"customer_name": {"$regex": search, "$options": "i"}},
             {"customer_phone": {"$regex": search, "$options": "i"}},
             {"order_id": {"$regex": search, "$options": "i"}},
-            {"link_id": {"$regex": search, "$options": "i"}}
+            {"link_id": {"$regex": search, "$options": "i"}},
         ]
     if from_date:
         query["created_at"] = {"$gte": from_date}
@@ -1269,18 +1277,24 @@ async def get_transactions(
             query["created_at"]["$lte"] = to_date
         else:
             query["created_at"] = {"$lte": to_date}
-    
+
     total = await db.payments.count_documents(query)
     skip = (page - 1) * limit
-    
-    payments = await db.payments.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
-    
+
+    payments = (
+        await db.payments.find(query, {"_id": 0})
+        .sort("created_at", -1)
+        .skip(skip)
+        .limit(limit)
+        .to_list(limit)
+    )
+
     return {
         "transactions": payments,
         "total": total,
         "page": page,
         "limit": limit,
-        "total_pages": (total + limit - 1) // limit
+        "total_pages": (total + limit - 1) // limit,
     }
 
 @router.get("/transactions/export.csv")

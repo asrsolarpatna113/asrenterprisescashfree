@@ -1427,7 +1427,12 @@ async def resend_payment_whatsapp(order_id: str):
 # Cashfree directly — propagates to: cashfree_orders, payments,
 # solar_service_bookings, lead stage, and a WhatsApp confirmation.
 
-async def _mark_order_paid(order: Dict, payment_data: Dict, source: str = "webhook") -> Dict:
+async def _mark_order_paid(
+    order: Dict,
+    payment_data: Dict,
+    source: str = "webhook",
+    is_api_verified: bool = False,
+) -> Dict:
     """Idempotently mark a cashfree order as paid and run all side effects.
 
     Concurrency-safe: uses an atomic conditional update (status != "paid") to
@@ -1437,10 +1442,13 @@ async def _mark_order_paid(order: Dict, payment_data: Dict, source: str = "webho
     'already_paid' immediately.
 
     Args:
-        order:          The DB document from cashfree_orders (must have order_id).
-        payment_data:   Dict with cf_payment_id, payment_amount, payment_time,
-                        payment_method, and (optional) full payload under "payment_details".
-        source:         "webhook" or "sync" — recorded for audit.
+        order:            The DB document from cashfree_orders (must have order_id).
+        payment_data:     Dict with cf_payment_id, payment_amount, payment_time,
+                          payment_method, and (optional) full payload under "payment_details".
+        source:           "webhook", "webhook_api_verified", or "sync" — recorded for audit.
+        is_api_verified:  True when payment was confirmed via Cashfree API call (not just
+                          webhook payload). Sets `is_verified=True` in the stored document,
+                          which is the authoritative flag used by the CRM payments view.
     Returns dict with processing summary.
     """
     order_id = order["order_id"]
@@ -1464,6 +1472,10 @@ async def _mark_order_paid(order: Dict, payment_data: Dict, source: str = "webho
         "payment_details": payment_details,
         "webhook_updated_at": received_at,
         "marked_paid_via": source,
+        # is_verified = True only when independently confirmed via Cashfree API.
+        # The CRM payments view uses this flag to show only authoritative records.
+        "is_verified": is_api_verified,
+        "is_verified_at": received_at if is_api_verified else None,
     }
 
     # ATOMIC: only one caller transitions the order from non-paid to paid.
@@ -1641,7 +1653,9 @@ async def _sync_order_with_cashfree(order_id: str) -> Dict:
                     "payment_method": successful_payment.get("payment_method", {}),
                     "payment_details": {"order": cf_order, "payment": successful_payment},
                 }
-                result = await _mark_order_paid(order, payment_data, source="sync")
+                result = await _mark_order_paid(
+                    order, payment_data, source="sync", is_api_verified=True
+                )
                 return {"order_id": order_id, "action": "synced_to_paid", "detail": result}
 
             if cf_status in ("EXPIRED", "TERMINATED", "TERMINATION_REQUESTED"):
@@ -1871,7 +1885,7 @@ async def cashfree_orders_webhook(request: Request):
         
         # Process based on event type
         processing_result = {"processed": False}
-        
+
         # Treat any of these signals as a successful payment.
         is_success_event = (
             event_type in ["PAYMENT_SUCCESS_WEBHOOK", "PAYMENT_SUCCESS"]
@@ -1880,6 +1894,102 @@ async def cashfree_orders_webhook(request: Request):
         )
 
         if is_success_event:
+            # ── GATE A: reject tiny/test amounts immediately ──────────────
+            # Get the amount from the webhook payload (may be 0 if missing)
+            webhook_amount = 0.0
+            try:
+                webhook_amount = float(
+                    payment_data.get("payment_amount")
+                    or order_data.get("order_amount")
+                    or 0
+                )
+            except (TypeError, ValueError):
+                webhook_amount = 0.0
+
+            if 0 < webhook_amount <= 10:
+                logger.warning(
+                    f"[CF-Webhook] REJECTING tiny-amount event: "
+                    f"order_id={order_id!r} amount=₹{webhook_amount}"
+                )
+                await db.cashfree_webhook_logs.update_one(
+                    {"id": webhook_id},
+                    {"$set": {"status": "rejected",
+                              "reject_reason": f"amount_too_small: ₹{webhook_amount}"}},
+                )
+                return {"status": "ok", "message": f"Rejected: ₹{webhook_amount} below ₹10 minimum"}
+
+            # ── GATE B: Cashfree API double-verification ──────────────────
+            # Do NOT trust the webhook payload alone even after signature check.
+            # Call the Cashfree orders/payments API to independently confirm.
+            # If the API is temporarily unreachable we fall back to trusting the
+            # signed webhook (which is still better than nothing), but log the fact.
+            api_verified = False
+            api_verified_payment_data = None
+            if CASHFREE_PRODUCTION_APP_ID and CASHFREE_PRODUCTION_SECRET_KEY and order_id:
+                try:
+                    cf_headers = {
+                        "x-client-id": CASHFREE_PRODUCTION_APP_ID,
+                        "x-client-secret": CASHFREE_PRODUCTION_SECRET_KEY,
+                        "x-api-version": CASHFREE_API_VERSION,
+                        "Content-Type": "application/json",
+                    }
+                    cf_base = get_cashfree_api_url()
+                    async with httpx.AsyncClient(timeout=10.0) as _hc:
+                        # Hit GET /orders/{order_id}/payments — ground truth
+                        _pr = await _hc.get(
+                            f"{cf_base}/orders/{order_id}/payments",
+                            headers=cf_headers,
+                        )
+                    if _pr.status_code == 200:
+                        _plist = _pr.json() if isinstance(_pr.json(), list) else []
+                        for _p in _plist:
+                            if ((_p.get("payment_status") or "").upper() == "SUCCESS"
+                                    and float(_p.get("payment_amount") or 0) > 10):
+                                api_verified = True
+                                api_verified_payment_data = {
+                                    "cf_payment_id": str(_p.get("cf_payment_id", "")),
+                                    "payment_amount": float(_p.get("payment_amount", 0)),
+                                    "payment_time": _p.get("payment_completion_time",
+                                                           received_at),
+                                    "payment_method": _p.get("payment_method", {}),
+                                    "payment_details": {"api_verified": True,
+                                                        "payment": _p},
+                                }
+                                break
+                        if not api_verified:
+                            logger.warning(
+                                f"[CF-Webhook] API returned no SUCCESS payment for "
+                                f"order_id={order_id!r} — event rejected as unconfirmed"
+                            )
+                            await db.cashfree_webhook_logs.update_one(
+                                {"id": webhook_id},
+                                {"$set": {"status": "rejected",
+                                          "reject_reason": "api_not_confirmed"}},
+                            )
+                            return {
+                                "status": "ok",
+                                "message": "Webhook rejected: Cashfree API did not confirm payment",
+                            }
+                    else:
+                        # API error — fall back to trusting signed webhook with a warning
+                        logger.error(
+                            f"[CF-Webhook] API verify HTTP {_pr.status_code} for "
+                            f"{order_id!r} — falling back to signed webhook"
+                        )
+                except Exception as _ve:
+                    logger.error(
+                        f"[CF-Webhook] API verify exception for {order_id!r}: {_ve} "
+                        f"— falling back to signed webhook"
+                    )
+            else:
+                logger.debug(
+                    f"[CF-Webhook] Cashfree creds not configured — skipping API verify "
+                    f"for {order_id!r}"
+                )
+
+            # Use API-confirmed data if available, else signed webhook data
+            effective_payment_data = api_verified_payment_data or payment_data
+
             # Step 2: try to find the order in DB by exact order_id.
             order = await db.cashfree_orders.find_one({"order_id": order_id}, {"_id": 0})
 
@@ -1933,19 +2043,43 @@ async def cashfree_orders_webhook(request: Request):
                     )
                     return {"status": "ok", "webhook_id": webhook_id, **processing_result}
 
+                # ── GATE C: reject suspicious customer names ──────────────
+                _SUSPICIOUS_NAME_TOKENS = {
+                    "test", "verify", "admin", "<script", "javascript:",
+                    "onerror", "onload", "fake", "dummy", "sample",
+                }
+                _cname = (order.get("customer_name") or "").lower()
+                if any(tok in _cname for tok in _SUSPICIOUS_NAME_TOKENS):
+                    logger.warning(
+                        f"[CF-Webhook] REJECTING suspicious customer name: "
+                        f"order_id={order_id!r} name={_cname!r}"
+                    )
+                    await db.cashfree_webhook_logs.update_one(
+                        {"id": webhook_id},
+                        {"$set": {"status": "rejected",
+                                  "reject_reason": f"suspicious_name: {_cname[:100]}"}},
+                    )
+                    return {
+                        "status": "ok",
+                        "message": f"Rejected: suspicious customer name",
+                    }
+
                 # Step 3: delegate to the shared helper. It atomically marks
                 # the order paid, upserts db.payments, syncs the service
                 # booking, updates lead stage, and fires WhatsApp.
                 processing_result = await _mark_order_paid(
                     order=order,
                     payment_data={
-                        "cf_payment_id": payment_data.get("cf_payment_id", ""),
-                        "payment_amount": payment_data.get("payment_amount", order.get("amount", 0)),
-                        "payment_time": payment_data.get("payment_time", received_at),
-                        "payment_method": payment_data.get("payment_method", {}),
-                        "payment_details": data,
+                        "cf_payment_id": effective_payment_data.get("cf_payment_id", ""),
+                        "payment_amount": effective_payment_data.get(
+                            "payment_amount", order.get("amount", 0)
+                        ),
+                        "payment_time": effective_payment_data.get("payment_time", received_at),
+                        "payment_method": effective_payment_data.get("payment_method", {}),
+                        "payment_details": effective_payment_data.get("payment_details", data),
                     },
-                    source="webhook",
+                    source="webhook_api_verified" if api_verified else "webhook",
+                    is_api_verified=api_verified,
                 )
                 wa_status = (processing_result.get("confirmations") or {}).get("whatsapp_sent")
                 logger.info(
