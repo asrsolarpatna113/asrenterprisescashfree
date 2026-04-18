@@ -2215,6 +2215,142 @@ async def bulk_delete_orders(request: BulkDeleteRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Status values that mean "this order has real money behind it" — must NEVER
+# be soft-deleted by the cleanup tool. Kept lowercase; query is case-folded.
+_PAID_STATUSES = {"paid", "success", "successful", "captured", "completed",
+                  "settled", "confirmed"}
+# Pre-payment statuses that ARE eligible for stale-cleanup if old enough.
+# Anything not in this set is treated as paid-by-default for safety.
+_UNPAID_STATUSES = {"active", "created", "pending", "initiated",
+                    "expired", "cancelled", "failed", "user_dropped"}
+
+
+@router.post("/orders/cleanup-test-data")
+@limiter.limit(RATE_LIMIT_SENSITIVE)
+async def cleanup_test_data(
+    request: Request,
+    confirm: bool = False,
+    max_amount: float = 5.0,
+    stale_pending_hours: int = 48,
+):
+    """
+    Targeted cleanup of obvious garbage transactions:
+      1. Tiny test payments (amount <= max_amount, default ₹5)
+      2. Orders whose customer_name contains script-injection markers
+         (`<`, `>`, `script`, `javascript:`, `onerror`, `onload`)
+      3. Stale unpaid orders older than `stale_pending_hours` (default 48h)
+
+    Verified-paid orders (status in `_PAID_STATUSES`) are NEVER touched —
+    enforced via an explicit positive allow-list of unpaid statuses, so any
+    unrecognized status is treated as paid-by-default. Soft-deletes only.
+
+    Auth: requires `x-admin-token` header (same secret as /sync/* endpoints).
+    Requires `?confirm=true` to actually delete; otherwise returns a dry-run.
+    """
+    _require_admin_token(request)
+    try:
+        now = datetime.now(timezone.utc)
+        stale_cutoff_iso = (now - timedelta(hours=stale_pending_hours)).isoformat()
+
+        xss_markers = ["<", ">", "script", "javascript:", "onerror", "onload"]
+        xss_regex = "|".join(xss_markers)
+
+        # Positive allow-list of statuses we're willing to touch. Combined with
+        # the per-doc paid-status check below, this is double-belt-and-braces:
+        # an order with status "paid" CANNOT match any clause.
+        unpaid_status_filter = {"status": {"$in": list(_UNPAID_STATUSES)}}
+
+        match_clauses = [
+            # 1. tiny amounts (only on unpaid orders)
+            {"$and": [unpaid_status_filter,
+                      {"amount": {"$lte": max_amount, "$gt": 0}}]},
+            # 2. script-injected customer names (only on unpaid orders)
+            {"$and": [unpaid_status_filter,
+                      {"customer_name": {"$regex": xss_regex, "$options": "i"}}]},
+            # 3. stale unpaid orders
+            {"$and": [unpaid_status_filter,
+                      {"created_at": {"$lt": stale_cutoff_iso}}]},
+        ]
+
+        query = {
+            "$and": [
+                {"$or": match_clauses},
+                {"is_deleted": {"$ne": True}},
+                # Hard guard, redundant with per-clause filter — defense in depth.
+                {"status": {"$nin": list(_PAID_STATUSES)}},
+            ]
+        }
+
+        # Preview / count
+        cursor = db.cashfree_orders.find(query, {
+            "order_id": 1, "amount": 1, "status": 1,
+            "customer_name": 1, "created_at": 1,
+        })
+        try:
+            preview_docs = await cursor.to_list(length=500)
+        except TypeError:
+            preview_docs = list(cursor)
+
+        # Final in-Python paid-status guard. Even if the Mongo query somehow
+        # let one through, we drop it here before deleting.
+        safe_docs = [d for d in preview_docs
+                     if str(d.get("status", "")).lower() not in _PAID_STATUSES]
+
+        preview = [
+            {
+                "order_id": d.get("order_id"),
+                "amount": d.get("amount"),
+                "status": d.get("status"),
+                "name": d.get("customer_name"),
+                "created_at": d.get("created_at"),
+            }
+            for d in safe_docs
+        ]
+
+        if not confirm:
+            return {
+                "success": True,
+                "dry_run": True,
+                "would_delete_count": len(preview),
+                "sample": preview[:25],
+                "message": "Dry-run only. POST again with ?confirm=true to soft-delete these.",
+            }
+
+        # Delete by explicit ID list (NOT by query) so the Python-side guard
+        # is authoritative — no chance of a TOCTOU race deleting a freshly-paid order.
+        order_ids = [d.get("order_id") for d in safe_docs if d.get("order_id")]
+        if not order_ids:
+            return {"success": True, "dry_run": False, "deleted_count": 0, "sample": []}
+
+        result = await db.cashfree_orders.update_many(
+            {"order_id": {"$in": order_ids},
+             "status": {"$nin": list(_PAID_STATUSES)}},
+            {"$set": {"is_deleted": True, "deleted_at": now.isoformat(),
+                      "deleted_reason": "cleanup-test-data"}},
+        )
+        await db.payments.update_many(
+            {"order_id": {"$in": order_ids},
+             "status": {"$nin": list(_PAID_STATUSES)}},
+            {"$set": {"is_deleted": True, "deleted_at": now.isoformat(),
+                      "deleted_reason": "cleanup-test-data"}},
+        )
+
+        deleted_count = getattr(result, "modified_count", len(order_ids))
+        logger.info(f"[Cleanup Test Data] soft-deleted {deleted_count} orders")
+        return {
+            "success": True,
+            "dry_run": False,
+            "deleted_count": deleted_count,
+            "sample": preview[:25],
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Cleanup Test Data] error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/orders/permanent-delete/{order_id}")
 async def permanent_delete_order(order_id: str, confirm: bool = False):
     """

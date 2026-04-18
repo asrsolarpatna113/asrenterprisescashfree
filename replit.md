@@ -106,3 +106,56 @@ ASR Enterprises is a full-stack web application with a Create React App frontend
 - **CSP completed** — added the third-party scripts the React app actually loads (`assets.emergent.sh`, `connect.facebook.net`, `us.i.posthog.com` + `*.i.posthog.com`, `www.recaptcha.net`) to `script-src`/`connect-src`/`frame-src`, so production CSP no longer breaks PostHog analytics, Facebook Pixel, Emergent debug tooling, or Google reCAPTCHA xhr.
 - **Open-redirect tightened** — `origin_url` validator now: HTTPS-only in production (no http downgrade), strict allowlist only (`*.replit.dev` fallback removed in production, kept in dev for preview), IDN/punycode-normalized host comparison (Cyrillic look-alikes blocked: `www.аsrenterprises.in` → rejected as `www.xn--srenterprises-v1k.in`), and rebuilds URL from sanitized `scheme + hostname` only (drops userinfo and arbitrary ports).
 - **Canonical-host redirect skip-list** — extended from `/api/` to `/api/`, `/webhook`, `/cashfree` so Meta webhook verification GETs and Cashfree return URLs remain on whatever host they were called with.
+
+## Sweep 2026-04-18 — UX polish + DNS docs + test-data cleanup
+
+### New: cleanup endpoint for fake/test transactions
+- `POST /api/cashfree/orders/cleanup-test-data` (in `backend/routes/cashfree_orders.py`).
+  Soft-deletes orders matching ANY of: amount ≤ ₹5, customer name containing
+  XSS markers (`<`, `>`, `script`, `javascript:`, `onerror`, `onload`), or
+  pending/created status older than 48h. **Verified-paid orders (SUCCESS/PAID)
+  are explicitly excluded.** Defaults to dry-run; pass `?confirm=true` to apply.
+- Wired into Payments dashboard as "Cleanup Test Data" button (amber). Always
+  shows a preview confirm dialog before deletion.
+
+### Auto-logout: 10/30/15 → 60/60/30 min
+- `frontend/src/hooks/useAutoLogout.js`. Old 10-min admin window was the most
+  likely cause of "logged out on back button" complaints (browser back-nav does
+  not fire mousemove/scroll, so the timer was already past expiry on restore).
+
+### Lead-count "going to 0" fix
+- `frontend/src/components/LeadsManagement.js`: on fetch failure we now KEEP
+  the previously loaded list and show an amber error banner with a Refresh
+  button, instead of silently `setLeads([])`. The "0 Total" the user was
+  seeing was almost always a transient API failure, not a real data wipe.
+
+### DNS / SSL setup (USER ACTION REQUIRED — agent cannot do this)
+SSL is auto-issued and auto-renewed by Replit on the deployed domain, but only
+after you point DNS correctly:
+
+1. In your domain registrar (where you bought `asrenterprises.in`), add:
+   ```
+   Type   Host   Value             TTL
+   A      @      34.111.179.208    3600
+   A      www    34.111.179.208    3600
+   ```
+   (If a TXT verification record is shown in the Replit Deployments → Domains
+   panel, copy it verbatim into a TXT record on `@`.)
+2. In Replit → Deployments → Domains, add BOTH `asrenterprises.in` AND
+   `www.asrenterprises.in`. Wait until both show "Verified" and "SSL Active"
+   (usually 5–30 min, sometimes up to 24h for DNS to propagate).
+3. After SSL is active, set these deployment **Secrets** (not dev secrets):
+   - `FORCE_HTTPS=true`
+   - `CANONICAL_HOST=www.asrenterprises.in`
+   - `ALLOWED_REDIRECT_HOSTS=asrenterprises.in,www.asrenterprises.in`
+4. Re-deploy. The `NET::ERR_CERT_COMMON_NAME_INVALID` will disappear once the
+   cert covers both names AND the canonical-host redirect routes everything
+   through `www.`.
+
+### Known limitation (NOT changed in this round)
+Admin/staff "auth" is a `localStorage` flag (`asrAdminAuth=true`) — anyone who
+sets that key in devtools can access the admin UI. The only real protection is
+that backend admin endpoints ARE rate-limited and the OTP flow is gated, but
+direct API calls don't require an Authorization header. Migrating to real JWT +
+backend `Depends(require_admin)` is a multi-day refactor touching every admin
+route — flagged here so it's not forgotten.

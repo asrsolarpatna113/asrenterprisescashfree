@@ -1118,6 +1118,52 @@ export const PaymentsDashboard = ({ leads = [] }) => {
     setDeleteLoading(false);
   };
 
+  // Targeted cleanup of obvious garbage transactions: tiny ₹1-style test
+  // payments, script-injected names, and stale never-paid orders. Always
+  // dry-runs first so the admin sees what will be removed.
+  const handleCleanupTestData = async () => {
+    // In production the backend requires `x-admin-token` matching the
+    // ADMIN_API_TOKEN env var. We pull it from localStorage so the admin can
+    // paste it once via devtools without baking a secret into the JS bundle.
+    // In dev (no token configured server-side) the call works without it.
+    const adminToken = (localStorage.getItem("asrAdminApiToken") || "").trim();
+    const headers = adminToken ? { "x-admin-token": adminToken } : {};
+    setDeleteLoading(true);
+    try {
+      const dry = await axios.post(
+        `${API}/cashfree/orders/cleanup-test-data`, null, { headers }
+      );
+      const n = dry.data?.would_delete_count || 0;
+      if (!n) {
+        alert("No test/fake transactions found. Nothing to clean up.");
+        return;
+      }
+      const sample = (dry.data?.sample || [])
+        .slice(0, 5)
+        .map(s => `• ${s.order_id} — ₹${s.amount} — ${s.status} — ${s.name || "(no name)"}`)
+        .join("\n");
+      const ok = window.confirm(
+        `Found ${n} suspicious transactions to soft-delete:\n\n${sample}\n\n` +
+        `Verified-paid orders are NOT touched. Proceed?`
+      );
+      if (!ok) return;
+      const res = await axios.post(
+        `${API}/cashfree/orders/cleanup-test-data?confirm=true`, null, { headers }
+      );
+      alert(`Cleaned up ${res.data?.deleted_count || 0} transactions.`);
+      fetchTransactions(pagination.page);
+      fetchStats();
+    } catch (err) {
+      const detail = err.response?.data?.detail || "Cleanup failed";
+      const hint = err.response?.status === 401
+        ? "\n\nIn production set ADMIN_API_TOKEN on the deployment, then run in devtools:\n  localStorage.setItem('asrAdminApiToken','<your-token>')"
+        : "";
+      alert(detail + hint);
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
+
   const handleCreateForLead = (lead) => {
     setSelectedLead(lead);
     setShowCreateModal(true);
@@ -1327,6 +1373,15 @@ export const PaymentsDashboard = ({ leads = [] }) => {
           >
             <Download className="w-4 h-4" />
             Export CSV
+          </button>
+          <button
+            onClick={handleCleanupTestData}
+            disabled={deleteLoading}
+            className="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 flex items-center gap-2 disabled:opacity-50"
+            title="Remove ₹1 test entries, script-injected names, and stale unpaid orders. Verified payments are never touched."
+          >
+            <Trash2 className="w-4 h-4" />
+            Cleanup Test Data
           </button>
         </div>
         

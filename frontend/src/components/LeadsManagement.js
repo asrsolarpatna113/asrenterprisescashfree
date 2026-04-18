@@ -28,6 +28,7 @@ export const LeadsManagement = () => {
 
   const [leads, setLeads] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
   const [editingLead, setEditingLead] = useState(null);
@@ -58,22 +59,33 @@ export const LeadsManagement = () => {
 
   const fetchLeads = async () => {
     setLoading(true);
+    // IMPORTANT: do NOT clear leads on a transient fetch failure — the user
+    // sees that as "leads disappeared / count went to 0". Keep the previous
+    // list, surface an error banner, and only overwrite on a real success.
+    let succeeded = false;
     try {
       const res = await axios.get(`${API}/crm/leads?limit=100`);
-      // Handle both old format (array) and new format (object with leads array)
       const leadsData = Array.isArray(res.data) ? res.data : (res.data.leads || []);
       setLeads(leadsData);
+      setFetchError(null);
+      succeeded = true;
     } catch (err) {
-      console.error("Error fetching leads:", err);
-      // Fallback to admin leads endpoint
+      console.error("Error fetching leads (primary):", err);
       try {
         const res = await axios.get(`${API}/leads`);
         const leadsData = Array.isArray(res.data) ? res.data : (res.data.leads || []);
         setLeads(leadsData);
+        setFetchError(null);
+        succeeded = true;
       } catch (e) {
-        console.error("Fallback error:", e);
-        setLeads([]);
+        console.error("Error fetching leads (fallback):", e);
       }
+    }
+    if (!succeeded) {
+      setFetchError(
+        "Could not refresh leads from the server. Showing the last loaded list. " +
+        "Check your internet and click Refresh to try again."
+      );
     }
     setLoading(false);
   };
@@ -330,6 +342,17 @@ export const LeadsManagement = () => {
               {leads.length} Total
             </span>
           </div>
+          {fetchError && (
+            <div className="w-full mt-3 bg-amber-50 border border-amber-300 text-amber-900 px-4 py-2 rounded-lg text-sm flex items-center justify-between gap-2">
+              <span>{fetchError}</span>
+              <button
+                onClick={fetchLeads}
+                className="px-3 py-1 bg-amber-600 text-white rounded-md hover:bg-amber-700 text-xs font-medium"
+              >
+                Refresh
+              </button>
+            </div>
+          )}
           <div className="flex flex-wrap gap-2">
             <button
               onClick={() => setShowAddModal(true)}

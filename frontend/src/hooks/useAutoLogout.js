@@ -1,10 +1,13 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-// Admin: 10 min, Staff: 30 min, Customer: 15 min
-const ADMIN_INACTIVITY_TIMEOUT    = 10 * 60 * 1000;
-const STAFF_INACTIVITY_TIMEOUT    = 30 * 60 * 1000;
-const CUSTOMER_INACTIVITY_TIMEOUT = 15 * 60 * 1000;
+// Admin: 60 min, Staff: 60 min, Customer: 30 min.
+// Bumped from 10/30/15 — short admin window was triggering on browser
+// back-button (no activity events fire during a back-nav restore), causing
+// the perceived "logged out on back button" complaints.
+const ADMIN_INACTIVITY_TIMEOUT    = 60 * 60 * 1000;
+const STAFF_INACTIVITY_TIMEOUT    = 60 * 60 * 1000;
+const CUSTOMER_INACTIVITY_TIMEOUT = 30 * 60 * 1000;
 
 const getTimeout = (userType) => {
   if (userType === 'staff')    return STAFF_INACTIVITY_TIMEOUT;
