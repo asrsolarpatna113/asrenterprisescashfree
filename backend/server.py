@@ -624,7 +624,7 @@ async def startup_event():
 
     # Log which database mode is active
     from db_client import MONGO_URI as _MONGO_URI, USE_IN_MEMORY as _USE_IN_MEMORY
-    if _MONGO_URI:
+    if _MONGO_URI and not _USE_IN_MEMORY:
         logger.info("🌐 DATABASE MODE: MongoDB Atlas (fully persistent) ✅")
         # Verify Atlas connectivity at startup
         try:
@@ -637,7 +637,10 @@ async def startup_event():
         except Exception as _pe:
             logger.error(f"❌ Atlas ping error: {_pe}")
     elif _USE_IN_MEMORY:
-        logger.warning("⚠️  DATABASE MODE: In-memory (data lost on restart). Set MONGO_URI secret for persistence.")
+        if _MONGO_URI:
+            logger.warning("⚠️  DATABASE MODE: In-memory (Atlas DNS failed — verify MONGO_URI hostname). Data will NOT persist across restarts.")
+        else:
+            logger.warning("⚠️  DATABASE MODE: In-memory (data lost on restart). Set MONGO_URI secret for persistence.")
     else:
         logger.info("🏠 DATABASE MODE: Local MongoDB (MONGO_URL)")
 
@@ -3533,8 +3536,9 @@ async def database_status():
     """Get database health status, storage mode, and collection statistics"""
     from db_client import MONGO_URI as _MONGO_URI, USE_IN_MEMORY as _USE_IN_MEMORY, ping_db
     try:
-        # Determine storage mode
-        if _MONGO_URI:
+        # Determine storage mode — USE_IN_MEMORY is the canonical flag
+        # (it may be True even when MONGO_URI is set, if Atlas DNS failed at startup)
+        if _MONGO_URI and not _USE_IN_MEMORY:
             db_mode = "mongodb_atlas"
             db_mode_label = "MongoDB Atlas (Fully Persistent ✅)"
             is_persistent = True

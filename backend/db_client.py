@@ -2,6 +2,7 @@
 
 Priority order for database selection:
   1. MONGO_URI is set → real MongoDB Atlas (fully persistent, production mode)
+     Falls back to in-memory if the Atlas URI is unreachable at startup.
   2. USE_IN_MEMORY_MONGO=true  → mongomock-motor with JSON snapshot fallback
   3. default                   → real Motor client against MONGO_URL
 
@@ -13,6 +14,8 @@ import asyncio
 import json
 import logging
 import os
+import socket
+import re
 from datetime import date, datetime
 from pathlib import Path
 
@@ -22,23 +25,45 @@ logger = logging.getLogger(__name__)
 # Determine database mode
 # ──────────────────────────────────────────────────────────────────────────────
 
-# If an external Atlas URI is configured, always use real MongoDB.
 MONGO_URI = os.environ.get("MONGO_URI", "").strip()
 
+# We test DNS before committing to Atlas mode so we can fall back gracefully.
+_atlas_reachable = False
+
+def _test_atlas_dns(uri: str) -> bool:
+    """Return True if the hostname in the SRV URI resolves in DNS."""
+    try:
+        # Extract hostname from mongodb+srv://user:pass@HOST/db?...
+        m = re.search(r"mongodb(?:\+srv)?://[^@]+@([^/:?]+)", uri)
+        if not m:
+            return False
+        host = m.group(1)
+        # Try standard DNS resolution with a 5-second timeout
+        socket.setdefaulttimeout(5)
+        socket.getaddrinfo(host, None)
+        return True
+    except Exception as exc:
+        logger.warning(f"[db] Atlas DNS check failed for URI hostname: {exc}")
+        return False
+
 if MONGO_URI:
-    USE_IN_MEMORY = False
-    logger.info("[db] MONGO_URI is set — using MongoDB Atlas (persistent)")
+    _atlas_reachable = _test_atlas_dns(MONGO_URI)
+    if _atlas_reachable:
+        USE_IN_MEMORY = False
+        logger.info("[db] MONGO_URI set and hostname resolves — using MongoDB Atlas (persistent)")
+    else:
+        USE_IN_MEMORY = True
+        logger.error(
+            "[db] MONGO_URI is set but Atlas hostname does NOT resolve in DNS. "
+            "Possible causes: cluster hostname is wrong, or DNS hasn't propagated yet. "
+            "Falling back to in-memory mode. Data will NOT persist across restarts."
+        )
 else:
     USE_IN_MEMORY = os.environ.get("USE_IN_MEMORY_MONGO", "").lower() == "true"
     if USE_IN_MEMORY:
         logger.info("[db] USE_IN_MEMORY_MONGO=true — using in-memory database with snapshot")
     else:
         logger.info("[db] Using local/network MongoDB via MONGO_URL")
-
-if USE_IN_MEMORY:
-    from mongomock_motor import AsyncMongoMockClient as AsyncIOMotorClient
-else:
-    from motor.motor_asyncio import AsyncIOMotorClient  # type: ignore
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Snapshot (in-memory fallback only)
@@ -51,6 +76,15 @@ SNAPSHOT_PATH = Path(os.environ.get("MONGO_SNAPSHOT_PATH", str(_DEFAULT_SNAPSHOT
 _BLOCKED_STAFF_IDS = {"ASR1003", "ASR1004"}
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Export the right client class so routes can `from db_client import AsyncIOMotorClient`
+# ──────────────────────────────────────────────────────────────────────────────
+
+if USE_IN_MEMORY:
+    from mongomock_motor import AsyncMongoMockClient as AsyncIOMotorClient  # noqa: F401
+else:
+    from motor.motor_asyncio import AsyncIOMotorClient  # type: ignore  # noqa: F401
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Shared client / db (process-wide singleton)
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -58,30 +92,41 @@ _shared_client = None
 _shared_dbs: dict = {}
 
 
-def get_client():
-    """Return the process-wide shared MongoDB client (lazy-initialized).
+def _make_real_client(uri: str):
+    """Create a Motor AsyncIOMotorClient for the given URI."""
+    from motor.motor_asyncio import AsyncIOMotorClient as _RealClient  # type: ignore
+    return _RealClient(
+        uri,
+        serverSelectionTimeoutMS=10_000,
+        connectTimeoutMS=10_000,
+        socketTimeoutMS=30_000,
+        retryWrites=True,
+        retryReads=True,
+        maxPoolSize=10,
+        minPoolSize=1,
+    )
 
-    Connection string priority:
-      1. MONGO_URI  (Atlas / external)
-      2. MONGO_URL  (local / network fallback)
-    """
+
+def _make_inmemory_client():
+    """Create a mongomock-motor in-memory client."""
+    from mongomock_motor import AsyncMongoMockClient as _MockClient
+    return _MockClient()
+
+
+def get_client():
+    """Return the process-wide shared MongoDB client (lazy-initialized)."""
     global _shared_client
     if _shared_client is None:
-        if MONGO_URI:
-            _shared_client = AsyncIOMotorClient(
-                MONGO_URI,
-                serverSelectionTimeoutMS=10_000,
-                connectTimeoutMS=10_000,
-                socketTimeoutMS=30_000,
-                retryWrites=True,
-                retryReads=True,
-                maxPoolSize=10,
-                minPoolSize=1,
-            )
-            logger.info("[db] MongoDB Atlas client created")
+        if MONGO_URI and not USE_IN_MEMORY:
+            _shared_client = _make_real_client(MONGO_URI)
+            logger.info("[db] MongoDB Atlas Motor client created")
+        elif USE_IN_MEMORY:
+            _shared_client = _make_inmemory_client()
+            logger.info("[db] In-memory MongoDB client created")
         else:
             mongo_url = os.environ.get("MONGO_URL", "mongodb://127.0.0.1:27017")
-            _shared_client = AsyncIOMotorClient(mongo_url)
+            _shared_client = _make_real_client(mongo_url)
+            logger.info(f"[db] Local MongoDB client created: {mongo_url}")
     return _shared_client
 
 
