@@ -4,7 +4,8 @@ import {
   MessageSquare, Send, Users, Settings, BarChart3, RefreshCw, 
   CheckCircle, XCircle, Clock, Eye, AlertTriangle, Filter, Search,
   ChevronLeft, ChevronRight, Phone, FileText, Zap, X, Plus, Inbox,
-  Bot, ShieldCheck, BrainCircuit, Wifi, WifiOff
+  Bot, ShieldCheck, BrainCircuit, Wifi, WifiOff, Flame, MailWarning,
+  MailCheck, RadioTower
 } from 'lucide-react';
 import { WhatsAppInbox } from './WhatsAppInbox';
 
@@ -543,6 +544,238 @@ export const BulkCampaignModal = ({ isOpen, onClose, selectedLeads, onCampaignSt
   );
 };
 
+// ========================= CRM INBOX VIEW =========================
+const CRMInboxView = () => {
+  const [activeFilter, setActiveFilter] = useState('replies');
+  const [leads, setLeads] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [loading, setLoading] = useState(false);
+  const [counts, setCounts] = useState({ replies: 0, failed: 0, follow_up: 0, bulk_sent: 0 });
+
+  const filters = [
+    { id: 'replies',    label: 'Replies',    icon: Flame,       color: 'green',  desc: 'Customers who replied' },
+    { id: 'failed',     label: 'Failed',     icon: XCircle,     color: 'red',    desc: 'Template delivery failed' },
+    { id: 'follow_up',  label: 'Follow-up',  icon: Clock,       color: 'yellow', desc: 'Delivered but not read' },
+    { id: 'bulk_sent',  label: 'Bulk Sent',  icon: RadioTower,  color: 'blue',   desc: 'All campaign recipients' },
+  ];
+
+  const colorMap = {
+    green:  { tab: 'bg-green-500 text-white',  badge: 'bg-green-100 text-green-700',  border: 'border-green-300',  dot: 'bg-green-400', pill: 'bg-green-50' },
+    red:    { tab: 'bg-red-500 text-white',    badge: 'bg-red-100 text-red-700',      border: 'border-red-300',    dot: 'bg-red-400',   pill: 'bg-red-50' },
+    yellow: { tab: 'bg-yellow-500 text-white', badge: 'bg-yellow-100 text-yellow-700',border: 'border-yellow-300', dot: 'bg-yellow-400',pill: 'bg-yellow-50' },
+    blue:   { tab: 'bg-blue-500 text-white',   badge: 'bg-blue-100 text-blue-700',    border: 'border-blue-300',   dot: 'bg-blue-400',  pill: 'bg-blue-50' },
+  };
+
+  const fetchLeads = useCallback(async (filter, pg) => {
+    setLoading(true);
+    try {
+      const res = await axios.get(`${API}/api/whatsapp/crm-inbox?filter=${filter}&page=${pg}&limit=50`);
+      setLeads(res.data.leads || []);
+      setTotal(res.data.total || 0);
+    } catch (e) {
+      console.error('CRM Inbox error:', e);
+    }
+    setLoading(false);
+  }, []);
+
+  const fetchCounts = useCallback(async () => {
+    try {
+      const results = await Promise.allSettled(
+        ['replies', 'failed', 'follow_up', 'bulk_sent'].map(f =>
+          axios.get(`${API}/api/whatsapp/crm-inbox?filter=${f}&page=1&limit=1`)
+        )
+      );
+      const [r, f, fu, bs] = results.map(r => r.status === 'fulfilled' ? r.value.data.total : 0);
+      setCounts({ replies: r, failed: f, follow_up: fu, bulk_sent: bs });
+    } catch (e) { /* silent */ }
+  }, []);
+
+  useEffect(() => { fetchLeads(activeFilter, 1); setPage(1); }, [activeFilter, fetchLeads]);
+  useEffect(() => { fetchCounts(); }, [fetchCounts]);
+
+  const currentFilter = filters.find(f => f.id === activeFilter);
+  const c = colorMap[currentFilter?.color || 'green'];
+  const totalPages = Math.ceil(total / 50);
+
+  const handlePageChange = (newPage) => { setPage(newPage); fetchLeads(activeFilter, newPage); };
+
+  const getStatusBadges = (lead) => {
+    const badges = [];
+    if (lead.wa_reply_received) badges.push({ label: '💬 Replied', cls: 'bg-green-100 text-green-700' });
+    if (lead.wa_read)      badges.push({ label: '👁 Read',    cls: 'bg-blue-100 text-blue-700' });
+    if (lead.wa_delivered) badges.push({ label: '✓ Delivered', cls: 'bg-gray-100 text-gray-700' });
+    if (lead.wa_failed)    badges.push({ label: '✗ Failed',   cls: 'bg-red-100 text-red-700' });
+    if (lead.templateSent && !lead.wa_delivered && !lead.wa_failed)
+                           badges.push({ label: '📤 Sent',    cls: 'bg-sky-100 text-sky-700' });
+    return badges;
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="bg-white rounded-xl border border-gray-200 p-4">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+              <Inbox className="w-5 h-5 text-green-500" />
+              WhatsApp CRM Inbox
+            </h2>
+            <p className="text-xs text-gray-500">Track bulk campaigns — replies, failures & follow-ups</p>
+          </div>
+          <button
+            onClick={() => { fetchLeads(activeFilter, page); fetchCounts(); }}
+            className="text-gray-400 hover:text-gray-600 p-2 rounded-lg hover:bg-gray-100"
+          >
+            <RefreshCw className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Filter Tabs */}
+        <div className="flex flex-wrap gap-2">
+          {filters.map(f => {
+            const cnt = counts[f.id] || 0;
+            const active = activeFilter === f.id;
+            const fc = colorMap[f.color];
+            return (
+              <button
+                key={f.id}
+                onClick={() => setActiveFilter(f.id)}
+                className={`flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium transition border ${
+                  active
+                    ? `${fc.tab} border-transparent shadow-md`
+                    : `bg-white ${fc.border} text-gray-600 hover:${fc.pill}`
+                }`}
+              >
+                <f.icon className="w-4 h-4" />
+                {f.label}
+                {cnt > 0 && (
+                  <span className={`text-xs px-1.5 py-0.5 rounded-full font-bold ${active ? 'bg-white/20 text-white' : fc.badge}`}>
+                    {cnt}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Lead List */}
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className={`px-4 py-3 border-b flex items-center justify-between ${c.pill}`}>
+          <div className="flex items-center gap-2">
+            {currentFilter && <currentFilter.icon className="w-4 h-4" />}
+            <span className="font-semibold text-gray-800">{currentFilter?.label}</span>
+            <span className="text-xs text-gray-500">— {currentFilter?.desc}</span>
+          </div>
+          <span className={`text-xs font-bold px-2 py-1 rounded-full ${c.badge}`}>{total} leads</span>
+        </div>
+
+        {loading ? (
+          <div className="flex items-center justify-center py-16">
+            <RefreshCw className="w-8 h-8 text-gray-300 animate-spin" />
+          </div>
+        ) : leads.length === 0 ? (
+          <div className="text-center py-16 text-gray-400">
+            <Inbox className="w-12 h-12 mx-auto mb-3 opacity-30" />
+            <p className="font-medium">No leads in this filter</p>
+            <p className="text-sm">Send a bulk campaign to start tracking</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-gray-100">
+            {leads.map(lead => {
+              const badges = getStatusBadges(lead);
+              const isReply = lead.wa_reply_received;
+              const isFailed = lead.wa_failed;
+              return (
+                <div
+                  key={lead.id}
+                  className={`px-4 py-3 hover:bg-gray-50 transition border-l-4 ${
+                    isReply  ? 'border-l-green-400' :
+                    isFailed ? 'border-l-red-400' :
+                    lead.wa_read ? 'border-l-blue-400' :
+                    lead.wa_delivered ? 'border-l-yellow-400' :
+                    'border-l-gray-200'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    {/* Lead info */}
+                    <div className="flex items-start gap-3 min-w-0">
+                      <div className={`w-9 h-9 rounded-full flex items-center justify-center text-white text-sm font-bold shrink-0 ${
+                        isReply  ? 'bg-green-500' :
+                        isFailed ? 'bg-red-500' :
+                        'bg-gray-400'
+                      }`}>
+                        {(lead.name || '?')[0].toUpperCase()}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="font-semibold text-gray-800 text-sm">{lead.name || 'Unknown'}</p>
+                          {isReply && <span className="text-xs text-green-600 font-bold">🔥 HIGH PRIORITY</span>}
+                        </div>
+                        <p className="text-xs text-gray-500">{lead.phone}</p>
+                        {lead.templateName && (
+                          <p className="text-xs text-gray-400 mt-0.5">Template: <span className="font-mono">{lead.templateName}</span></p>
+                        )}
+                        {lead.wa_last_message && (
+                          <p className="text-xs text-gray-600 mt-1 italic truncate max-w-xs">
+                            💬 "{lead.wa_last_message}"
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Status badges + time */}
+                    <div className="flex flex-col items-end gap-1 shrink-0">
+                      <div className="flex flex-wrap gap-1 justify-end">
+                        {badges.map((b, i) => (
+                          <span key={i} className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${b.cls}`}>{b.label}</span>
+                        ))}
+                      </div>
+                      {(lead.wa_last_message_time || lead.templateSentAt) && (
+                        <p className="text-xs text-gray-400">
+                          {new Date(lead.wa_last_message_time || lead.templateSentAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                        </p>
+                      )}
+                      <div className="flex gap-1">
+                        {lead.district && <span className="text-xs text-gray-400">{lead.district}</span>}
+                        {lead.stage && <span className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{lead.stage}</span>}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Pagination */}
+        {totalPages > 1 && (
+          <div className="px-4 py-3 border-t border-gray-100 flex items-center justify-between">
+            <p className="text-xs text-gray-500">Page {page} of {totalPages} · {total} total</p>
+            <div className="flex gap-2">
+              <button
+                disabled={page <= 1}
+                onClick={() => handlePageChange(page - 1)}
+                className="px-3 py-1 text-sm border rounded-lg disabled:opacity-40 hover:bg-gray-50"
+              >
+                ← Prev
+              </button>
+              <button
+                disabled={page >= totalPages}
+                onClick={() => handlePageChange(page + 1)}
+                className="px-3 py-1 text-sm border rounded-lg disabled:opacity-40 hover:bg-gray-50"
+              >
+                Next →
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 // Main WhatsApp CRM Module
 export const WhatsAppModule = () => {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -693,6 +926,7 @@ export const WhatsAppModule = () => {
   const tabs = [
     { id: 'dashboard', label: 'Dashboard', icon: BarChart3 },
     { id: 'inbox', label: 'Inbox', icon: Inbox },
+    { id: 'crm_inbox', label: 'CRM Inbox', icon: Flame },
     { id: 'campaigns', label: 'Campaigns', icon: Users },
     { id: 'messages', label: 'History', icon: MessageSquare },
     { id: 'templates', label: 'Templates', icon: FileText },
@@ -795,6 +1029,11 @@ export const WhatsAppModule = () => {
       {/* Inbox Tab - Primary WhatsApp Chat Interface */}
       {activeTab === 'inbox' && (
         <WhatsAppInbox />
+      )}
+
+      {/* CRM Inbox Tab - Filtered bulk tracking */}
+      {activeTab === 'crm_inbox' && (
+        <CRMInboxView />
       )}
       
       {/* Campaigns Tab */}

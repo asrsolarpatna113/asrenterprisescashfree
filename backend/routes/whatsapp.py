@@ -811,6 +811,34 @@ async def process_campaign_batch(campaign_id: str, template_name: str, batch_siz
                 }}
             )
             
+            # Update CRM lead with campaign tracking fields
+            if recipient.get("lead_id"):
+                now_iso = datetime.now(timezone.utc).isoformat()
+                if result.get("success"):
+                    await db.crm_leads.update_one(
+                        {"id": recipient["lead_id"]},
+                        {"$set": {
+                            "templateSent": True,
+                            "templateName": template_name,
+                            "templateSentAt": now_iso,
+                            "wa_status": "sent",
+                            "wa_delivered": False,
+                            "wa_read": False,
+                            "wa_failed": False,
+                        }}
+                    )
+                else:
+                    await db.crm_leads.update_one(
+                        {"id": recipient["lead_id"]},
+                        {"$set": {
+                            "templateSent": False,
+                            "templateName": template_name,
+                            "templateSentAt": now_iso,
+                            "wa_status": "failed",
+                            "wa_failed": True,
+                        }}
+                    )
+            
             if result.get("success"):
                 sent += 1
             else:
@@ -891,6 +919,46 @@ async def get_campaign_details(campaign_id: str):
         "campaign": campaign,
         "stats": stats,
         "recipients": recipients[:100]  # Limit to first 100 for display
+    }
+
+# ==================== CRM INBOX ENDPOINT ====================
+
+@router.get("/crm-inbox")
+async def get_crm_inbox(filter: str = "replies", page: int = 1, limit: int = 50):
+    """
+    Filtered CRM inbox based on WhatsApp campaign tracking fields on leads.
+    Filters:
+      - replies    : wa_reply_received=true  (customer replied — high priority)
+      - failed     : wa_failed=true          (template delivery failed)
+      - follow_up  : wa_delivered=true AND wa_read != true  (delivered but not read)
+      - bulk_sent  : templateSent=true       (all leads that received a template)
+    """
+    skip = (page - 1) * limit
+
+    if filter == "replies":
+        query = {"wa_reply_received": True}
+        sort_field = "wa_last_message_time"
+    elif filter == "failed":
+        query = {"wa_failed": True}
+        sort_field = "templateSentAt"
+    elif filter == "follow_up":
+        query = {"wa_delivered": True, "wa_read": {"$ne": True}}
+        sort_field = "templateSentAt"
+    else:  # bulk_sent
+        query = {"templateSent": True}
+        sort_field = "templateSentAt"
+
+    total = await db.crm_leads.count_documents(query)
+    leads = await db.crm_leads.find(query, {"_id": 0}).sort(
+        [(sort_field, -1), ("timestamp", -1)]
+    ).skip(skip).limit(limit).to_list(limit)
+
+    return {
+        "leads": leads,
+        "total": total,
+        "page": page,
+        "per_page": limit,
+        "filter": filter,
     }
 
 # ==================== MESSAGE HISTORY ENDPOINTS ====================
@@ -2020,8 +2088,9 @@ async def process_incoming_message(message: Dict, value: Dict):
             {"$set": {"lead_id": new_lead_id}}
         )
     
-    # Add activity to existing lead
+    # Add activity to existing lead + update reply tracking
     if lead_id and lead:
+        now_iso = datetime.now(timezone.utc).isoformat()
         await db.crm_leads.update_one(
             {"id": lead_id},
             {
@@ -2031,13 +2100,29 @@ async def process_incoming_message(message: Dict, value: Dict):
                         "type": "whatsapp_reply",
                         "title": "WhatsApp Reply Received",
                         "description": content[:200] if content else "Received message",
-                        "timestamp": datetime.now(timezone.utc).isoformat()
+                        "timestamp": now_iso
                     }
                 },
                 "$set": {
-                    "last_interaction": datetime.now(timezone.utc).isoformat()
+                    "last_interaction": now_iso,
+                    "wa_reply_received": True,
+                    "wa_priority": "high",
+                    "wa_last_message": content[:500] if content else "",
+                    "wa_last_message_time": now_iso,
                 }
             }
+        )
+    elif lead_id and not lead:
+        # New lead created — set reply tracking on it
+        now_iso = datetime.now(timezone.utc).isoformat()
+        await db.crm_leads.update_one(
+            {"id": lead_id},
+            {"$set": {
+                "wa_reply_received": True,
+                "wa_priority": "high",
+                "wa_last_message": content[:500] if content else "",
+                "wa_last_message_time": now_iso,
+            }}
         )
     
     # Cancel any pending follow-ups since customer responded
@@ -2126,14 +2211,15 @@ async def process_status_update(status: Dict):
     """Process message status update (sent, delivered, read, failed)"""
     wa_message_id = status.get("id", "")
     status_value = status.get("status", "")
-    # recipient_phone available but not currently needed
+    recipient_phone = status.get("recipient_id", "")
+    now_iso = datetime.now(timezone.utc).isoformat()
     
     # Update message status
     await db.whatsapp_messages.update_one(
         {"wa_message_id": wa_message_id},
         {"$set": {
             "status": status_value,
-            f"{status_value}_at": datetime.now(timezone.utc).isoformat()
+            f"{status_value}_at": now_iso
         }}
     )
     
@@ -2155,6 +2241,25 @@ async def process_status_update(status: Dict):
                 {"id": message["campaign_id"]},
                 {"$inc": {field: 1}}
             )
+    
+    # Update CRM lead tracking fields based on status
+    lead_query = None
+    if recipient_phone:
+        cleaned = clean_phone_number(recipient_phone)
+        lead_query = {"$or": [{"phone": cleaned}, {"phone": recipient_phone}]}
+    else:
+        # Fall back: look up phone via whatsapp_messages
+        msg = await db.whatsapp_messages.find_one({"wa_message_id": wa_message_id}, {"lead_id": 1})
+        if msg and msg.get("lead_id"):
+            lead_query = {"id": msg["lead_id"]}
+    
+    if lead_query:
+        if status_value == "delivered":
+            await db.crm_leads.update_one(lead_query, {"$set": {"wa_delivered": True, "wa_status": "delivered"}})
+        elif status_value == "read":
+            await db.crm_leads.update_one(lead_query, {"$set": {"wa_read": True, "wa_status": "read"}})
+        elif status_value == "failed":
+            await db.crm_leads.update_one(lead_query, {"$set": {"wa_failed": True, "wa_status": "failed", "wa_priority": "low"}})
 
 # ==================== AUTOMATION SETTINGS ====================
 
