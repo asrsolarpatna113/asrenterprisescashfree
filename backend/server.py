@@ -622,6 +622,25 @@ async def startup_event():
     # Initialize Redis cache
     await init_redis()
 
+    # Log which database mode is active
+    from db_client import MONGO_URI as _MONGO_URI, USE_IN_MEMORY as _USE_IN_MEMORY
+    if _MONGO_URI:
+        logger.info("🌐 DATABASE MODE: MongoDB Atlas (fully persistent) ✅")
+        # Verify Atlas connectivity at startup
+        try:
+            from db_client import ping_db
+            ok = await ping_db()
+            if ok:
+                logger.info("✅ MongoDB Atlas connection verified")
+            else:
+                logger.error("❌ MongoDB Atlas ping FAILED — check MONGO_URI secret")
+        except Exception as _pe:
+            logger.error(f"❌ Atlas ping error: {_pe}")
+    elif _USE_IN_MEMORY:
+        logger.warning("⚠️  DATABASE MODE: In-memory (data lost on restart). Set MONGO_URI secret for persistence.")
+    else:
+        logger.info("🏠 DATABASE MODE: Local MongoDB (MONGO_URL)")
+
     # Restore in-memory database from disk snapshot (no-op when using real Mongo)
     try:
         await load_snapshot(client, os.environ['DB_NAME'])
@@ -1026,17 +1045,9 @@ async def perform_cleanup(deep_clean: bool = False):
         })
         cleanup_results["old_notifications_deleted"] = notifications_result.deleted_count
 
-        # 5b. Delete WhatsApp messages older than 24 hours from the inbox DB
-        # This keeps the chat history lean while still supporting the 24h reply window
-        whatsapp_cutoff = (now - timedelta(hours=24)).isoformat()
-        try:
-            wa_msgs_result = await db.whatsapp_messages.delete_many({
-                "created_at": {"$lt": whatsapp_cutoff}
-            })
-            cleanup_results["old_whatsapp_messages_deleted"] = wa_msgs_result.deleted_count
-        except Exception as _wae:
-            logger.warning(f"[Cleanup] WhatsApp message cleanup failed: {_wae}")
-            cleanup_results["old_whatsapp_messages_deleted"] = 0
+        # 5b. WhatsApp messages are CRM records — do NOT auto-delete them.
+        # Message history is permanent; admins can manually clear via the CRM UI.
+        cleanup_results["old_whatsapp_messages_deleted"] = 0
         
         # 6. Clear API cache
         invalidate_cache()
@@ -3519,40 +3530,53 @@ async def database_cleanup(request: Request):
 
 @api_router.get("/admin/database/status")
 async def database_status():
-    """Get database health status and statistics"""
+    """Get database health status, storage mode, and collection statistics"""
+    from db_client import MONGO_URI as _MONGO_URI, USE_IN_MEMORY as _USE_IN_MEMORY, ping_db
     try:
+        # Determine storage mode
+        if _MONGO_URI:
+            db_mode = "mongodb_atlas"
+            db_mode_label = "MongoDB Atlas (Fully Persistent ✅)"
+            is_persistent = True
+        elif _USE_IN_MEMORY:
+            db_mode = "in_memory"
+            db_mode_label = "In-Memory + Snapshot (Restart-Safe ⚠️)"
+            is_persistent = False
+        else:
+            db_mode = "local_mongodb"
+            db_mode_label = "Local MongoDB"
+            is_persistent = True
+
+        # Ping DB
+        db_alive = await ping_db()
+
         stats = {}
-        
-        # Get collection stats
-        collections = ["leads", "orders", "products", "chats", "staff", "sessions", "activity_logs"]
-        for coll in collections:
+        crm_collections = [
+            "crm_leads", "cashfree_orders", "whatsapp_messages", "crm_staff_accounts",
+            "hr_employees", "crm_tasks", "crm_followups", "crm_payments"
+        ]
+        for coll in crm_collections:
             try:
                 count = await db[coll].count_documents({})
-                stats[coll] = {"count": count}
+                stats[coll] = count
             except:
-                stats[coll] = {"count": 0}
-        
-        # Get cache stats
+                stats[coll] = 0
+
         cache_stats = {
             "entries": len(api_cache),
             "size_estimate_kb": len(str(api_cache)) // 1024
         }
-        
-        # Check index status
-        index_status = {}
-        for coll in ["leads", "orders", "products"]:
-            try:
-                indexes = await db[coll].index_information()
-                index_status[coll] = len(indexes)
-            except:
-                index_status[coll] = 0
-        
+
         return {
-            "status": "healthy",
+            "status": "healthy" if db_alive else "degraded",
+            "db_mode": db_mode,
+            "db_mode_label": db_mode_label,
+            "is_persistent": is_persistent,
+            "db_alive": db_alive,
             "collections": stats,
             "cache": cache_stats,
-            "indexes": index_status,
-            "timestamp": datetime.now(timezone.utc).isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "recommendation": None if is_persistent else "Set MONGO_URI secret with your MongoDB Atlas connection string for fully persistent storage"
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}

@@ -1225,6 +1225,9 @@ export const CRMDashboard = () => {
   const [trashedLeads, setTrashedLeads] = useState([]);
   const [showTrashTab, setShowTrashTab] = useState(false);
   
+  // DB persistence status
+  const [dbStatus, setDbStatus] = useState(null);
+
   // WhatsApp Cloud API Integration state
   const [showWhatsAppModal, setShowWhatsAppModal] = useState(false);
   const [whatsAppModalLead, setWhatsAppModalLead] = useState(null);
@@ -1352,6 +1355,8 @@ export const CRMDashboard = () => {
     fetchDistricts(); 
     fetchGalleryPhotos(); // Load gallery photos for admin
     fetchSiteSettings(); // Load site settings for marquee editor
+    // Check DB persistence mode
+    axios.get(`${API}/admin/database/status`).then(r => setDbStatus(r.data)).catch(() => {});
   }, []);
   
   // Periodically refresh new leads count
@@ -2180,6 +2185,31 @@ export const CRMDashboard = () => {
           </div>
         </div>
       </div>
+
+      {/* DB Persistence Status Banner */}
+      {dbStatus && !dbStatus.is_persistent && (
+        <div className="bg-amber-50 border-b border-amber-300 px-4 py-2 flex items-center justify-between text-sm">
+          <div className="flex items-center gap-2 text-amber-800">
+            <span className="text-base">⚠️</span>
+            <span className="font-medium">In-Memory Database Active</span>
+            <span className="text-amber-600 hidden sm:inline">— Data may be lost on server restart. Set MONGO_URI secret to enable MongoDB Atlas.</span>
+          </div>
+          <span className="text-xs bg-amber-200 text-amber-900 px-2 py-0.5 rounded font-mono">
+            {dbStatus.collections?.crm_leads ?? 0} leads · {dbStatus.collections?.cashfree_orders ?? 0} payments
+          </span>
+        </div>
+      )}
+      {dbStatus && dbStatus.is_persistent && dbStatus.db_mode === 'mongodb_atlas' && (
+        <div className="bg-emerald-50 border-b border-emerald-200 px-4 py-1.5 flex items-center justify-between text-xs">
+          <div className="flex items-center gap-2 text-emerald-700">
+            <span>✅</span>
+            <span className="font-medium">MongoDB Atlas Active — All data is fully persistent</span>
+          </div>
+          <span className="text-emerald-600 font-mono">
+            {dbStatus.collections?.crm_leads ?? 0} leads · {dbStatus.collections?.cashfree_orders ?? 0} payments · {dbStatus.collections?.whatsapp_messages ?? 0} messages
+          </span>
+        </div>
+      )}
 
       {/* Navigation - Scrollable on Mobile */}
       <div className="bg-white shadow-sm border-b border-sky-200">
