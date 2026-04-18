@@ -211,8 +211,8 @@ const ChatBubble = ({ message, selectionMode, isSelected, onToggleSelect, onDele
         {/* Template indicator */}
         {message.template_name && (
           <div className="flex items-center gap-1 text-xs mb-1 text-purple-600">
-            <FileText className="w-3 h-3" />
-            <span className="truncate">Template: {message.template_name}</span>
+            <FileText className="w-3 h-3 flex-shrink-0" />
+            <span className="break-all">Template: {message.template_name}</span>
           </div>
         )}
         

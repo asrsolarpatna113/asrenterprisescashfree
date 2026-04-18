@@ -24,6 +24,22 @@ ASR Enterprises is a full-stack web application with a Create React App frontend
 - Run command starts FastAPI on `0.0.0.0:${PORT:-5000}` and serves the compiled React app from `frontend/build`.
 - Frontend production dependencies were aligned for normal npm install: React 18, React DOM 18, date-fns 3, ESLint 8, AJV 8.
 - The public website theme uses a premium light solar palette with sunlit gold, solar-glass blue, emerald CTA accents, and visible solar-panel grid/array effects on the homepage hero and zero-bill section.
+## April 18, 2026 — Leads Bin, 250/page, Soft-Delete & WhatsApp Cleanup
+
+### Frontend changes
+- **LeadsManagement.js**: Added "Leads Bin" tab — soft-deleted leads appear here with countdown timer (days remaining before permanent deletion). Restore button per lead. Bin count badge on tab.
+- **LeadsManagement.js**: Leads fetch limit increased 100 → 250.
+- **LeadsManagement.js**: Single delete and bulk delete now both soft-delete (move to Leads Bin) instead of permanent delete. Confirmation message updated accordingly.
+- **StaffPortal.js**: Staff leads fetch limit increased 150 → 250.
+- **WhatsAppInbox.js**: Template name display changed from `truncate` to `break-all` so full template name is visible in chat bubbles.
+
+### Backend changes
+- **server.py**: `GET /dashboard/widget/counts` and CRM stats endpoints now exclude `is_deleted=true` leads from all counts — dashboard numbers match only live (non-deleted) leads.
+- **server.py**: Staff leads endpoint (`GET /staff/{staff_id}/leads`) now filters out `is_deleted=true` leads so deleted leads don't appear in staff portal.
+- **server.py**: Daily cleanup scheduler now purges WhatsApp messages older than 24 hours from `whatsapp_messages` collection (keeps chat history lean, compliant with Meta 24h window policy).
+
+---
+
 ## April 17, 2026 — HR / Cashfree CRM / WhatsApp Template Fixes
 
 **Fixed 7 reported issues via 3 architectural changes:**

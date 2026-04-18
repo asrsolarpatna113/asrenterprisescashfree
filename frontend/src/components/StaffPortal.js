@@ -164,7 +164,7 @@ export const StaffPortal = () => {
       
       const [dashRes, leadsRes, followupsRes, tasksRes, msgRes, unreadRes, notifRes] = await Promise.all([
         axios.get(`${API}/staff/${staffData.staff_id}/dashboard`),
-        axios.get(`${API}/staff/${staffData.staff_id}/leads?page=${pageToFetch}&limit=150`),
+        axios.get(`${API}/staff/${staffData.staff_id}/leads?page=${pageToFetch}&limit=250`),
         axios.get(`${API}/staff/${staffData.staff_id}/followups`),
         axios.get(`${API}/staff/${staffData.staff_id}/tasks/today`).catch(() => ({ data: [] })),
         axios.get(`${API}/staff/${staffData.staff_id}/messages`).catch(() => ({ data: [] })),

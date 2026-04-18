@@ -1025,6 +1025,18 @@ async def perform_cleanup(deep_clean: bool = False):
             "created_at": {"$lt": thirty_days_ago}
         })
         cleanup_results["old_notifications_deleted"] = notifications_result.deleted_count
+
+        # 5b. Delete WhatsApp messages older than 24 hours from the inbox DB
+        # This keeps the chat history lean while still supporting the 24h reply window
+        whatsapp_cutoff = (now - timedelta(hours=24)).isoformat()
+        try:
+            wa_msgs_result = await db.whatsapp_messages.delete_many({
+                "timestamp": {"$lt": whatsapp_cutoff}
+            })
+            cleanup_results["old_whatsapp_messages_deleted"] = wa_msgs_result.deleted_count
+        except Exception as _wae:
+            logger.warning(f"[Cleanup] WhatsApp message cleanup failed: {_wae}")
+            cleanup_results["old_whatsapp_messages_deleted"] = 0
         
         # 6. Clear API cache
         invalidate_cache()
@@ -3146,8 +3158,8 @@ async def get_dashboard_counts():
         db.orders.count_documents({}),
         db.leads.count_documents({"status": "new"}),
         db.orders.count_documents({"status": "pending"}),
-        db.crm_leads.count_documents({}),  # CRM leads
-        db.crm_leads.count_documents({"stage": "new"})  # New CRM leads
+        db.crm_leads.count_documents({"$or": [{"is_deleted": {"$exists": False}}, {"is_deleted": False}]}),  # CRM leads (excl. deleted)
+        db.crm_leads.count_documents({"stage": "new", "$or": [{"is_deleted": {"$exists": False}}, {"is_deleted": False}]})  # New CRM leads
     )
     
     # Use max of both collections
@@ -3277,13 +3289,13 @@ async def get_crm_stats_widget_v1():
     # Query both leads and crm_leads collections
     results = await asyncio.gather(
         db.leads.count_documents({}),
-        db.crm_leads.count_documents({}),
+        db.crm_leads.count_documents({"$or": [{"is_deleted": {"$exists": False}}, {"is_deleted": False}]}),
         db.leads.count_documents({"status": "new"}),
-        db.crm_leads.count_documents({"stage": "new"}),
+        db.crm_leads.count_documents({"stage": "new", "$or": [{"is_deleted": {"$exists": False}}, {"is_deleted": False}]}),
         db.leads.count_documents({"status": "qualified"}),
-        db.crm_leads.count_documents({"stage": "quotation"}),
+        db.crm_leads.count_documents({"stage": "quotation", "$or": [{"is_deleted": {"$exists": False}}, {"is_deleted": False}]}),
         db.leads.count_documents({"status": "converted"}),
-        db.crm_leads.count_documents({"stage": "completed"}),
+        db.crm_leads.count_documents({"stage": "completed", "$or": [{"is_deleted": {"$exists": False}}, {"is_deleted": False}]}),
         db.crm_staff_accounts.count_documents({"is_active": True}),
         db.crm_tasks.count_documents({"status": "pending"})
     )
@@ -4746,17 +4758,18 @@ async def get_staff_assigned_leads(staff_id: str, page: int = 1, limit: int = 15
         raise HTTPException(status_code=404, detail="Staff not found")
     
     staff_internal_id = staff.get("id")
+    _not_deleted = {"$or": [{"is_deleted": {"$exists": False}}, {"is_deleted": False}]}
     
-    # Get total count
-    total_count = await db.crm_leads.count_documents({"assigned_to": staff_internal_id})
+    # Get total count (exclude deleted)
+    total_count = await db.crm_leads.count_documents({"assigned_to": staff_internal_id, **_not_deleted})
     
     # Calculate pagination
     skip = (page - 1) * limit
     total_pages = (total_count + limit - 1) // limit if total_count > 0 else 1
     
-    # Get paginated leads
+    # Get paginated leads (exclude deleted, newest first)
     leads = await db.crm_leads.find(
-        {"assigned_to": staff_internal_id},
+        {"assigned_to": staff_internal_id, **_not_deleted},
         {"_id": 0}
     ).sort("timestamp", -1).skip(skip).limit(limit).to_list(limit)
     

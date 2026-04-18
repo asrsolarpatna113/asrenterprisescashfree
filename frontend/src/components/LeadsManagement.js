@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { ArrowLeft, Search, Phone, Mail, MapPin, Star, Trash2, Edit, X, Save, Plus, Upload, Download, RefreshCw, UserPlus, FileSpreadsheet, FileText, Image, CheckCircle, AlertCircle, Loader2, Eye } from "lucide-react";
+import { ArrowLeft, Search, Phone, Mail, MapPin, Star, Trash2, Edit, X, Save, Plus, Upload, Download, RefreshCw, UserPlus, FileSpreadsheet, FileText, Image, CheckCircle, AlertCircle, Loader2, Eye, RotateCcw, Archive, Clock } from "lucide-react";
 import axios from "axios";
 import { useAutoLogout } from "@/hooks/useAutoLogout";
 
@@ -48,6 +48,13 @@ export const LeadsManagement = () => {
   const smartFileInputRef = useRef(null);
   const [addingLead, setAddingLead] = useState(false);
   const fileInputRef = useRef(null);
+
+  // Leads Bin state
+  const [activeView, setActiveView] = useState("leads"); // "leads" | "bin"
+  const [binLeads, setBinLeads] = useState([]);
+  const [binLoading, setBinLoading] = useState(false);
+  const [binTotal, setBinTotal] = useState(0);
+  const [restoringIds, setRestoringIds] = useState(new Set());
   const [newLead, setNewLead] = useState({
     name: "", phone: "", email: "", district: "Patna", address: "",
     property_type: "residential", roof_type: "rcc", monthly_bill: "", notes: "", source: "manual"
@@ -64,7 +71,7 @@ export const LeadsManagement = () => {
     // list, surface an error banner, and only overwrite on a real success.
     let succeeded = false;
     try {
-      const res = await axios.get(`${API}/crm/leads?limit=100`);
+      const res = await axios.get(`${API}/crm/leads?limit=250`);
       const leadsData = Array.isArray(res.data) ? res.data : (res.data.leads || []);
       setLeads(leadsData);
       setFetchError(null);
@@ -72,7 +79,7 @@ export const LeadsManagement = () => {
     } catch (err) {
       console.error("Error fetching leads (primary):", err);
       try {
-        const res = await axios.get(`${API}/leads`);
+        const res = await axios.get(`${API}/leads?limit=250`);
         const leadsData = Array.isArray(res.data) ? res.data : (res.data.leads || []);
         setLeads(leadsData);
         setFetchError(null);
@@ -88,6 +95,33 @@ export const LeadsManagement = () => {
       );
     }
     setLoading(false);
+  };
+
+  const fetchBinLeads = async () => {
+    setBinLoading(true);
+    try {
+      const res = await axios.get(`${API}/crm/leads/trash?limit=250`);
+      setBinLeads(res.data.leads || []);
+      setBinTotal(res.data.total_count || 0);
+    } catch (err) {
+      console.error("Error fetching bin leads:", err);
+    }
+    setBinLoading(false);
+  };
+
+  const handleRestoreLead = async (leadId) => {
+    setRestoringIds(prev => new Set([...prev, leadId]));
+    try {
+      const res = await axios.post(`${API}/crm/leads/restore`, { lead_ids: [leadId] });
+      if (res.data.success) {
+        setBinLeads(prev => prev.filter(l => l.id !== leadId));
+        setBinTotal(prev => Math.max(0, prev - 1));
+        fetchLeads();
+      }
+    } catch (err) {
+      alert("Error restoring lead: " + (err.response?.data?.detail || err.message));
+    }
+    setRestoringIds(prev => { const s = new Set(prev); s.delete(leadId); return s; });
   };
 
   const handleAddLead = async (e) => {
@@ -235,7 +269,7 @@ export const LeadsManagement = () => {
       return;
     }
     
-    if (!window.confirm(`Are you sure you want to delete ${selectedLeadIds.length} leads? This action cannot be undone.`)) {
+    if (!window.confirm(`Move ${selectedLeadIds.length} leads to Leads Bin? They will be permanently deleted after 30 days. You can restore them anytime from the Leads Bin tab.`)) {
       return;
     }
     
@@ -249,7 +283,7 @@ export const LeadsManagement = () => {
       setSelectedLeadIds([]);
       fetchLeads();
     } catch (err) {
-      alert(err.response?.data?.detail || "Error deleting leads");
+      alert(err.response?.data?.detail || "Error moving leads to bin");
     }
     setBulkDeleting(false);
   };
@@ -266,12 +300,12 @@ export const LeadsManagement = () => {
   };
 
   const handleDelete = async (leadId) => {
-    if (window.confirm("Delete this lead? This will also remove it from CRM.")) {
+    if (window.confirm("Move this lead to Leads Bin? It will be permanently deleted after 30 days. You can restore it from the Leads Bin tab.")) {
       try {
-        await axios.delete(`${API}/admin/leads/${leadId}`);
+        await axios.post(`${API}/crm/leads/bulk-delete`, { lead_ids: [leadId] });
         fetchLeads();
       } catch (err) {
-        alert("Error deleting lead");
+        alert("Error moving lead to bin: " + (err.response?.data?.detail || err.message));
       }
     }
   };
@@ -856,6 +890,103 @@ export const LeadsManagement = () => {
           </div>
         )}
 
+        {/* View Tabs: All Leads / Leads Bin */}
+        <div className="flex gap-2 mb-6 border-b border-gray-200 pb-2">
+          <button
+            onClick={() => setActiveView("leads")}
+            className={`flex items-center gap-2 px-5 py-2 rounded-t-lg font-medium text-sm transition ${
+              activeView === "leads"
+                ? "bg-white border border-b-white border-gray-200 text-[#0a355e] shadow-sm -mb-px"
+                : "text-gray-500 hover:text-[#0a355e]"
+            }`}
+          >
+            <Search className="w-4 h-4" />
+            All Leads
+            <span className="bg-blue-100 text-blue-700 rounded-full px-2 py-0.5 text-xs font-bold">{leads.length}</span>
+          </button>
+          <button
+            onClick={() => { setActiveView("bin"); fetchBinLeads(); }}
+            className={`flex items-center gap-2 px-5 py-2 rounded-t-lg font-medium text-sm transition ${
+              activeView === "bin"
+                ? "bg-white border border-b-white border-gray-200 text-red-600 shadow-sm -mb-px"
+                : "text-gray-500 hover:text-red-500"
+            }`}
+          >
+            <Archive className="w-4 h-4" />
+            Leads Bin
+            {binTotal > 0 && (
+              <span className="bg-red-100 text-red-700 rounded-full px-2 py-0.5 text-xs font-bold">{binTotal}</span>
+            )}
+          </button>
+        </div>
+
+        {/* Leads Bin View */}
+        {activeView === "bin" && (
+          <div>
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6 flex items-start gap-3">
+              <Clock className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-amber-900 font-medium text-sm">Leads in the Bin are permanently deleted after 30 days.</p>
+                <p className="text-amber-700 text-xs mt-1">Restore any lead before the timer expires to keep it in your CRM.</p>
+              </div>
+            </div>
+
+            {binLoading ? (
+              <div className="flex items-center justify-center py-16">
+                <Loader2 className="w-8 h-8 animate-spin text-[#0a355e]" />
+              </div>
+            ) : binLeads.length === 0 ? (
+              <div className="text-center py-16">
+                <Archive className="w-12 h-12 mx-auto text-gray-300 mb-4" />
+                <p className="text-gray-500 font-medium">Leads Bin is empty</p>
+                <p className="text-gray-400 text-sm mt-1">Deleted leads appear here for 30 days before permanent removal.</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {binLeads.map(lead => {
+                  const daysLeft = lead.deleted_at
+                    ? Math.max(0, 30 - Math.floor((Date.now() - new Date(lead.deleted_at).getTime()) / (1000 * 60 * 60 * 24)))
+                    : 30;
+                  return (
+                    <div key={lead.id} className="bg-white border border-gray-200 rounded-xl p-4 flex flex-col md:flex-row md:items-center gap-4 shadow-sm">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-semibold text-[#0a355e]">{lead.name}</span>
+                          <span className="text-gray-500 text-sm">{lead.phone}</span>
+                          {lead.district && <span className="text-gray-400 text-xs">{lead.district}, Bihar</span>}
+                        </div>
+                        <div className="flex items-center gap-2 mt-1 flex-wrap">
+                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${daysLeft <= 5 ? 'bg-red-100 text-red-700' : daysLeft <= 10 ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-600'}`}>
+                            <Clock className="w-3 h-3 inline mr-1" />
+                            {daysLeft === 0 ? 'Deletes today' : `${daysLeft} day${daysLeft !== 1 ? 's' : ''} left`}
+                          </span>
+                          {lead.stage && <span className="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">{lead.stage}</span>}
+                          {lead.source && <span className="text-xs text-gray-400">via {lead.source}</span>}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleRestoreLead(lead.id)}
+                        disabled={restoringIds.has(lead.id)}
+                        className="flex items-center gap-2 bg-green-50 border border-green-300 text-green-700 px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-100 transition disabled:opacity-50 flex-shrink-0"
+                      >
+                        {restoringIds.has(lead.id) ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <RotateCcw className="w-4 h-4" />
+                        )}
+                        Restore
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Normal Leads View (hidden when bin is active) */}
+        {activeView === "leads" && <>
+
         {/* Filters */}
         <div className="bg-white shadow-lg border border-sky-200 rounded-xl p-4 mb-8 flex flex-col md:flex-row gap-4">
           <div className="flex-1 relative">
@@ -1189,6 +1320,8 @@ export const LeadsManagement = () => {
             <p className="text-gray-500">No leads found matching your criteria.</p>
           </div>
         )}
+        </>}
+
       </div>
     </div>
   );
