@@ -3,7 +3,8 @@ import axios from 'axios';
 import { 
   MessageSquare, Send, Users, Settings, BarChart3, RefreshCw, 
   CheckCircle, XCircle, Clock, Eye, AlertTriangle, Filter, Search,
-  ChevronLeft, ChevronRight, Phone, FileText, Zap, X, Plus, Inbox
+  ChevronLeft, ChevronRight, Phone, FileText, Zap, X, Plus, Inbox,
+  Bot, ShieldCheck, BrainCircuit, Wifi, WifiOff
 } from 'lucide-react';
 import { WhatsAppInbox } from './WhatsAppInbox';
 
@@ -551,6 +552,8 @@ export const WhatsAppModule = () => {
   const [templates, setTemplates] = useState([]);
   const [settings, setSettings] = useState(null);
   const [automation, setAutomation] = useState(null);
+  const [botStatus, setBotStatus] = useState(null);
+  const [savingBot, setSavingBot] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   
@@ -585,12 +588,14 @@ export const WhatsAppModule = () => {
         const res = await axios.get(`${API}/api/whatsapp/templates`);
         setTemplates(res.data || []);
       } else if (activeTab === 'settings') {
-        const [settingsRes, automationRes] = await Promise.all([
+        const [settingsRes, automationRes, botStatusRes] = await Promise.all([
           axios.get(`${API}/api/whatsapp/settings`),
-          axios.get(`${API}/api/whatsapp/automation/settings`)
+          axios.get(`${API}/api/whatsapp/automation/settings`),
+          axios.get(`${API}/api/whatsapp/automation/bot/status`).catch(() => ({ data: null }))
         ]);
         setSettings(settingsRes.data);
         setAutomation(automationRes.data);
+        setBotStatus(botStatusRes.data);
         if (settingsRes.data.configured) {
           setSettingsForm({
             access_token: '',  // Keep empty for security
@@ -664,6 +669,25 @@ export const WhatsAppModule = () => {
     } catch (err) {
       alert('Failed to save automation settings');
     }
+  };
+
+  const handleSaveBotSettings = async (updatedFields) => {
+    setSavingBot(true);
+    try {
+      const res = await axios.post(`${API}/api/whatsapp/automation/bot/settings`, updatedFields);
+      if (res.data) {
+        setBotStatus(prev => prev ? { ...prev, ...updatedFields } : updatedFields);
+      }
+    } catch (err) {
+      alert('Failed to save bot settings');
+    } finally {
+      setSavingBot(false);
+    }
+  };
+
+  const toggleBotFlag = async (field, currentValue) => {
+    const updated = { [field]: !currentValue };
+    await handleSaveBotSettings(updated);
   };
   
   const tabs = [
@@ -1135,6 +1159,151 @@ export const WhatsAppModule = () => {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* AI Bot Settings Panel */}
+      {activeTab === 'settings' && (
+        <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-5">
+          <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+            <Bot className="w-5 h-5 text-purple-500" />
+            AI Bot Settings
+          </h3>
+
+          {/* AI Provider Status */}
+          {botStatus?.ai_providers && (
+            <div className="grid grid-cols-2 gap-3 mb-2">
+              <div className={`flex items-center gap-3 p-3 rounded-xl border ${botStatus.ai_providers.openai ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200'}`}>
+                {botStatus.ai_providers.openai
+                  ? <Wifi className="w-4 h-4 text-green-500" />
+                  : <WifiOff className="w-4 h-4 text-gray-400" />}
+                <div>
+                  <p className="text-sm font-semibold text-gray-700">OpenAI GPT-4o-mini</p>
+                  <p className={`text-xs ${botStatus.ai_providers.openai ? 'text-green-600' : 'text-gray-400'}`}>
+                    {botStatus.ai_providers.openai ? 'API key configured' : 'Not configured'}
+                  </p>
+                </div>
+              </div>
+              <div className={`flex items-center gap-3 p-3 rounded-xl border ${botStatus.ai_providers.gemini ? 'bg-blue-50 border-blue-200' : 'bg-gray-50 border-gray-200'}`}>
+                {botStatus.ai_providers.gemini
+                  ? <Wifi className="w-4 h-4 text-blue-500" />
+                  : <WifiOff className="w-4 h-4 text-gray-400" />}
+                <div>
+                  <p className="text-sm font-semibold text-gray-700">Google Gemini Flash</p>
+                  <p className={`text-xs ${botStatus.ai_providers.gemini ? 'text-blue-600' : 'text-gray-400'}`}>
+                    {botStatus.ai_providers.gemini ? 'API key configured' : 'Not configured'}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {botStatus && !botStatus.ai_providers?.any_configured && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-amber-500 mt-0.5 shrink-0" />
+              <div>
+                <p className="text-amber-800 font-medium text-sm">No AI provider configured</p>
+                <p className="text-amber-700 text-xs mt-1">
+                  Add <code className="bg-amber-100 px-1 rounded">OPENAI_API_KEY</code> or <code className="bg-amber-100 px-1 rounded">GEMINI_API_KEY</code> as environment secrets to enable AI replies.
+                  The bot will still send keyword-matched menu replies without an AI provider.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Today's AI stats */}
+          {botStatus?.today_stats && (
+            <div className="bg-purple-50 border border-purple-100 rounded-xl p-4">
+              <p className="text-sm font-medium text-purple-700 mb-2">Today's Bot Activity</p>
+              <div className="grid grid-cols-3 gap-3 text-center">
+                <div>
+                  <p className="text-2xl font-bold text-purple-800">{botStatus.today_stats.welcome_sent || 0}</p>
+                  <p className="text-xs text-purple-600">Welcome Sent</p>
+                </div>
+                <div>
+                  <p className="text-2xl font-bold text-purple-800">{botStatus.today_stats.quick_replies_sent || 0}</p>
+                  <p className="text-xs text-purple-600">Menu Replies</p>
+                </div>
+                <div>
+                  <p className="text-2xl font-bold text-purple-800">{botStatus.today_stats.ai_replies_sent || 0}</p>
+                  <p className="text-xs text-purple-600">AI Replies</p>
+                </div>
+              </div>
+              <p className="text-xs text-purple-500 mt-2 text-center">{botStatus.current_time_ist}</p>
+            </div>
+          )}
+
+          {/* Toggle Controls */}
+          <div className="space-y-3">
+            {[
+              {
+                field: 'bot_enabled',
+                label: 'Master Bot Switch',
+                desc: 'Turn off to completely stop all automatic replies',
+                icon: <Bot className="w-4 h-4 text-purple-500" />,
+                value: botStatus?.bot_enabled,
+                color: 'purple'
+              },
+              {
+                field: 'ai_fallback_enabled',
+                label: 'AI Fallback Replies',
+                desc: 'When no menu option matches, use AI to generate a Hinglish reply',
+                icon: <BrainCircuit className="w-4 h-4 text-blue-500" />,
+                value: botStatus?.ai_fallback_enabled,
+                color: 'blue'
+              },
+              {
+                field: 'spam_filter_enabled',
+                label: 'Spam / Noise Filter',
+                desc: 'Ignore one-word replies like "ok", "👍", "ji" — no wasted AI calls',
+                icon: <ShieldCheck className="w-4 h-4 text-green-500" />,
+                value: botStatus?.spam_filter_enabled,
+                color: 'green'
+              },
+              {
+                field: 'pause_bot_on_human_handover',
+                label: 'Pause Bot on Human Handover',
+                desc: 'Bot stops replying when a team member takes over the conversation',
+                icon: <ShieldCheck className="w-4 h-4 text-amber-500" />,
+                value: botStatus?.pause_bot_on_human_handover,
+                color: 'amber'
+              },
+            ].map(({ field, label, desc, icon, value, color }) => (
+              <div key={field} className="flex items-center justify-between p-4 bg-gray-50 rounded-xl">
+                <div className="flex items-start gap-3">
+                  <div className={`mt-0.5 p-1.5 bg-${color}-100 rounded-lg`}>{icon}</div>
+                  <div>
+                    <p className="font-medium text-gray-800">{label}</p>
+                    <p className="text-sm text-gray-500">{desc}</p>
+                  </div>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer ml-4 shrink-0">
+                  <input
+                    type="checkbox"
+                    checked={!!value}
+                    onChange={() => toggleBotFlag(field, value)}
+                    className="sr-only peer"
+                    disabled={savingBot}
+                  />
+                  <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-500 disabled:opacity-50"></div>
+                </label>
+              </div>
+            ))}
+          </div>
+
+          {savingBot && (
+            <p className="text-sm text-gray-500 flex items-center gap-2">
+              <RefreshCw className="w-4 h-4 animate-spin" /> Saving...
+            </p>
+          )}
+
+          <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 text-sm text-blue-700">
+            <p className="font-medium mb-1">How the AI Bot works</p>
+            <p>1. New message arrives → Keyword matching first (options 1–7)</p>
+            <p>2. No keyword match + welcome already sent → AI generates Hinglish reply</p>
+            <p>3. Human takes over → Bot automatically pauses for that contact</p>
+            <p>4. AI uses conversation history for context (last 8 messages)</p>
+          </div>
         </div>
       )}
     </div>

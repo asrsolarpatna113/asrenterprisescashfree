@@ -24,6 +24,29 @@ ASR Enterprises is a full-stack web application with a Create React App frontend
 - Run command starts FastAPI on `0.0.0.0:${PORT:-5000}` and serves the compiled React app from `frontend/build`.
 - Frontend production dependencies were aligned for normal npm install: React 18, React DOM 18, date-fns 3, ESLint 8, AJV 8.
 - The public website theme uses a premium light solar palette with sunlit gold, solar-glass blue, emerald CTA accents, and visible solar-panel grid/array effects on the homepage hero and zero-bill section.
+## April 18, 2026 — WhatsApp AI Bot Automation (Session 2)
+
+### Architecture: WhatsApp Automation + AI Fallback
+- **Priority chain**: Keyword/menu matching (options 1-7) → AI fallback → no reply
+- **AI fallback** triggers only when: welcome already sent + no keyword match
+- **Spam filter**: noise messages (ok, 👍, ji, etc.) are silently skipped — no AI calls wasted
+- **Human handover pause**: bot stops replying when `human_required=True` on lead document
+- **Master switch**: `bot_enabled` flag in DB controls ALL auto-replies (welcome/menu/AI)
+- **AI providers**: OpenAI GPT-4o-mini (primary) → Google Gemini Flash (fallback), both optional
+- **Rate limit**: max 12 AI calls/hour/phone number enforced in memory
+
+### New files
+- `backend/routes/whatsapp_ai.py` — AI reply engine (OpenAI + Gemini, conversation history, noise filter, rate limit)
+
+### Modified files
+- `backend/routes/whatsapp_automation.py` — `process_auto_reply` now: (1) checks `bot_enabled` master switch at start, (2) at end runs AI fallback with noise/handover/rate-limit checks
+- `backend/routes/whatsapp_automation.py` — `get_automation_settings` default settings now include `bot_enabled`, `ai_fallback_enabled`, `spam_filter_enabled`, `pause_bot_on_human_handover`; back-fills these fields into existing settings documents
+- `backend/routes/whatsapp.py` — `/automation/bot/status` now returns `bot_enabled`, `ai_fallback_enabled`, `ai_providers` (OpenAI/Gemini configured?), `spam_filter_enabled`, `pause_bot_on_human_handover`, plus today's `ai_replies_sent` count
+- `frontend/src/components/WhatsAppCRM.js` — Settings tab now has "AI Bot Settings" card with: AI provider status indicators, today's activity stats (welcome/menu/AI), 4 toggle switches (Master Bot, AI Fallback, Spam Filter, Human Handover Pause), how-it-works guide
+
+### To enable AI replies
+Set environment secret `OPENAI_API_KEY` (GPT-4o-mini) or `GEMINI_API_KEY` (Gemini Flash). The bot still sends keyword-matched menu replies without any AI key.
+
 ## April 18, 2026 — Leads Bin, 250/page, Soft-Delete & WhatsApp Cleanup
 
 ### Frontend changes

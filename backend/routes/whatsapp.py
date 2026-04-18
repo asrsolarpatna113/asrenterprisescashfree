@@ -2324,8 +2324,31 @@ async def get_bot_status():
     # Get pending follow-ups
     pending_follow_ups = await db.whatsapp_follow_ups.count_documents({"status": "pending"})
     
+    # Fetch current settings (includes bot_enabled, ai_fallback_enabled, etc.)
+    from routes.whatsapp_automation import get_automation_settings
+    bot_settings = await get_automation_settings()
+
+    # Check AI provider availability
+    try:
+        from routes.whatsapp_ai import ai_provider_configured
+        ai_providers = ai_provider_configured()
+    except Exception:
+        ai_providers = {"openai": False, "gemini": False, "any_configured": False}
+
+    # AI replies sent today
+    ai_replies_today = await db.whatsapp_messages.count_documents({
+        "auto_reply_type": "ai_reply",
+        "created_at": {"$gte": today_start.isoformat()}
+    })
+    stats["ai_replies_sent"] = ai_replies_today
+
     return {
-        "bot_active": True,
+        "bot_active": bot_settings.get("bot_enabled", True),       # display alias
+        "bot_enabled": bot_settings.get("bot_enabled", True),      # actual DB field
+        "ai_fallback_enabled": bot_settings.get("ai_fallback_enabled", True),
+        "ai_providers": ai_providers,
+        "spam_filter_enabled": bot_settings.get("spam_filter_enabled", True),
+        "pause_bot_on_human_handover": bot_settings.get("pause_bot_on_human_handover", True),
         "is_business_hours": is_business_hours(),
         "current_time_ist": now_ist.strftime("%Y-%m-%d %H:%M:%S IST"),
         "current_day": now_ist.strftime("%A"),

@@ -29,6 +29,18 @@ from db_client import get_db
 db = get_db(DB_NAME)
 client = db.client
 
+# Lazy import AI module (avoids circular import at startup)
+_whatsapp_ai = None
+def _get_ai_module():
+    global _whatsapp_ai
+    if _whatsapp_ai is None:
+        try:
+            from routes import whatsapp_ai as _ai
+            _whatsapp_ai = _ai
+        except Exception as _e:
+            logger.warning(f"[WhatsApp AI] Could not import AI module: {_e}")
+    return _whatsapp_ai
+
 # ==================== ASR ENTERPRISES BUSINESS INFO ====================
 BUSINESS_INFO = {
     "name": "ASR Enterprises",
@@ -929,6 +941,16 @@ async def process_auto_reply(
     Returns:
         Dict with reply type and message, or None if no auto-reply needed
     """
+    # ── Master bot switch (checked first — fast exit if bot is disabled) ──
+    _bot_settings: Dict = {}
+    try:
+        _bot_settings = await get_automation_settings()
+        if not _bot_settings.get("bot_enabled", True):
+            logger.info(f"[Bot] Master bot disabled — no auto-reply for {phone}")
+            return None
+    except Exception as _bs_err:
+        logger.warning(f"[Bot] Could not read bot_enabled flag: {_bs_err}")
+
     # Get conversation state
     is_new = await is_new_conversation(phone)
     has_welcome = await has_received_welcome(phone)
@@ -1080,7 +1102,48 @@ async def process_auto_reply(
                 "language": language
             }
     
-    # No auto-reply needed
+    # ==================== AI FALLBACK ====================
+    # At this point: welcome was already sent, message doesn't match any menu
+    # option. Try the AI engine for a contextual Hinglish reply.
+
+    try:
+        # Reuse settings already loaded at function start
+        settings = _bot_settings or await get_automation_settings()
+
+        # Spam/noise filter
+        if settings.get("spam_filter_enabled", True):
+            ai_mod = _get_ai_module()
+            if ai_mod and ai_mod.is_noise_message(content):
+                logger.info(f"[Bot] Noise message from {phone}, skipping reply")
+                return None
+
+        # Human handover pause check
+        if settings.get("pause_bot_on_human_handover", True):
+            phone_suffix = phone[-10:] if len(phone) >= 10 else phone
+            lead_doc = await db.crm_leads.find_one(
+                {"$or": [{"phone": phone}, {"phone": phone_suffix}]},
+                {"_id": 0, "human_required": 1}
+            )
+            if lead_doc and lead_doc.get("human_required"):
+                logger.info(f"[Bot] Human handover active for {phone}, bot paused")
+                return None
+
+        # AI fallback
+        if settings.get("ai_fallback_enabled", True):
+            ai_mod = _get_ai_module()
+            if ai_mod:
+                ai_reply = await ai_mod.generate_ai_reply(phone, content, db)
+                if ai_reply:
+                    logger.info(f"[Bot] AI reply generated for {phone}")
+                    return {
+                        "type": "ai_reply",
+                        "message": ai_reply,
+                        "language": language,
+                    }
+    except Exception as _ai_err:
+        logger.warning(f"[Bot] AI fallback error for {phone}: {_ai_err}")
+
+    # No auto-reply needed (and AI fallback returned nothing or is disabled)
     logger.info(f"No auto-reply needed for {phone}: is_new={is_new}, has_welcome={has_welcome}")
     return None
 
@@ -1303,18 +1366,43 @@ async def get_automation_settings() -> Dict:
     
     if not settings:
         # Default settings
+        bh = BUSINESS_INFO["business_hours"]
         settings = {
+            "bot_enabled": True,           # Master on/off switch for the bot
             "welcome_enabled": True,
             "after_hours_enabled": True,
             "quick_replies_enabled": True,
             "auto_tagging_enabled": True,
-            "follow_up_enabled": False,  # Disabled by default due to 24h window
+            "follow_up_enabled": False,    # Disabled by default due to 24h window
             "follow_up_delay_hours": 24,
-            "business_hours": BUSINESS_INFO["business_hours"],
+            "ai_fallback_enabled": True,   # Use AI when keyword matching fails
+            "spam_filter_enabled": True,   # Skip noise messages (ok, 👍, etc.)
+            "pause_bot_on_human_handover": True,  # Stop bot when human takes over
+            "business_hours": {
+                "start": str(bh.get("start", "10:00:00")),
+                "end": str(bh.get("end", "20:00:00")),
+                "days": bh.get("days", [0, 1, 2, 3, 4, 5]),
+            },
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         await db.whatsapp_automation_settings.insert_one(settings)
-    
+    else:
+        # Back-fill new fields into existing settings document (non-destructive)
+        missing = {}
+        if "bot_enabled" not in settings:
+            missing["bot_enabled"] = True
+        if "ai_fallback_enabled" not in settings:
+            missing["ai_fallback_enabled"] = True
+        if "spam_filter_enabled" not in settings:
+            missing["spam_filter_enabled"] = True
+        if "pause_bot_on_human_handover" not in settings:
+            missing["pause_bot_on_human_handover"] = True
+        if missing:
+            await db.whatsapp_automation_settings.update_one(
+                {}, {"$set": missing}, upsert=True
+            )
+            settings.update(missing)
+
     return settings
 
 async def update_automation_settings(updates: Dict) -> Dict:
