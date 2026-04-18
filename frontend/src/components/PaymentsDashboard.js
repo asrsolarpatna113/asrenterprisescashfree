@@ -854,6 +854,15 @@ const TransactionRow = memo(({ payment, onRefresh, onResend, isSelected, onToggl
               <p className="font-semibold text-gray-800">{payment.customer_name}</p>
               <p className="text-sm text-gray-500">{payment.customer_phone}</p>
               <p className="text-xs text-gray-400 mt-1">{formatDateTime(payment.created_at)}</p>
+              {payment.is_verified ? (
+                <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  ✔ Verified by Cashfree
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-600 border border-amber-200">
+                  ⚠ Unverified
+                </span>
+              )}
             </div>
           </div>
           
@@ -983,7 +992,7 @@ export const PaymentsDashboard = ({ leads = [] }) => {
   const [stats, setStats] = useState(null);
   const [transactions, setTransactions] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, total: 0, total_pages: 1 });
-  const [filters, setFilters] = useState({ status: "", source: "", search: "", from_date: "", to_date: "", verified_only: false });
+  const [filters, setFilters] = useState({ status: "", source: "", search: "", from_date: "", to_date: "", include_unverified: false });
   const [revenueChart, setRevenueChart] = useState({ points: [], total_revenue: 0, period: "daily" });
   
   // Delete functionality
@@ -1038,7 +1047,7 @@ export const PaymentsDashboard = ({ leads = [] }) => {
       if (filters.search) params.append("search", filters.search);
       if (filters.from_date) params.append("from_date", filters.from_date);
       if (filters.to_date) params.append("to_date", filters.to_date);
-      if (filters.verified_only) params.append("verified_only", "true");
+      if (filters.include_unverified) params.append("include_unverified", "true");
 
       const res = await axios.get(`${API}/payments/transactions?${params}`);
       setTransactions(res.data.transactions || []);
@@ -1337,15 +1346,15 @@ export const PaymentsDashboard = ({ leads = [] }) => {
             ))}
           </select>
           <button
-            onClick={() => setFilters(f => ({ ...f, verified_only: !f.verified_only }))}
-            title="Show only payments independently confirmed via Cashfree API"
+            onClick={() => setFilters(f => ({ ...f, include_unverified: !f.include_unverified }))}
+            title="Show unverified/test payments — for admin debugging only. Default: OFF."
             className={`px-4 py-2 rounded-lg border flex items-center gap-2 text-sm font-medium transition ${
-              filters.verified_only
-                ? "bg-emerald-600 text-white border-emerald-600"
-                : "bg-white text-gray-600 border-gray-300 hover:border-emerald-400"
+              filters.include_unverified
+                ? "bg-amber-500 text-white border-amber-500"
+                : "bg-emerald-50 text-emerald-700 border-emerald-400"
             }`}
           >
-            {filters.verified_only ? "✔ Verified Only" : "All Payments"}
+            {filters.include_unverified ? "⚠ Showing All (Debug)" : "✔ Verified Only"}
           </button>
           <select
             value={filters.source}

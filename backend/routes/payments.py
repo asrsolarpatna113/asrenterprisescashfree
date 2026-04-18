@@ -1245,15 +1245,25 @@ async def get_transactions(
     search: Optional[str] = None,
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
-    verified_only: Optional[bool] = None,
+    include_unverified: Optional[bool] = None,
 ):
     """Get paginated list of payment transactions.
 
-    By default excludes soft-deleted records (`is_deleted != true`).
-    Pass `verified_only=true` to show only API-confirmed payments.
+    DEFAULT BEHAVIOUR (production-safe):
+      • Excludes soft-deleted records (`is_deleted != true`)
+      • Shows ONLY Cashfree-API-confirmed payments (`is_verified = true`)
+
+    Pass `include_unverified=true` (admin debug only) to include unverified
+    records as well. This param should NEVER be sent from the main CRM view —
+    only from explicit admin debug toggles.
     """
-    # Always exclude soft-deleted records — they should never appear in CRM
+    # Always exclude soft-deleted records — never appear in CRM regardless
     query: dict = {"is_deleted": {"$ne": True}}
+
+    # ENFORCE verified-only by default. Unverified records are hidden from
+    # all CRM views unless an admin explicitly opts in for debugging.
+    if not include_unverified:
+        query["is_verified"] = True
 
     if status:
         query["status"] = status
@@ -1261,8 +1271,6 @@ async def get_transactions(
         query["source"] = source
     if lead_id:
         query["lead_id"] = lead_id
-    if verified_only is True:
-        query["is_verified"] = True
     if search:
         query["$or"] = [
             {"customer_name": {"$regex": search, "$options": "i"}},
@@ -1511,27 +1519,36 @@ async def get_transaction_details(payment_id: str):
 
 @router.get("/dashboard/stats")
 async def get_payment_dashboard_stats():
-    """Get payment dashboard statistics"""
+    """Get payment dashboard statistics.
+
+    ALL revenue figures and counts are computed exclusively from verified,
+    non-deleted payments (is_verified=true, is_deleted != true).
+    This ensures the dashboard reflects ONLY real confirmed money.
+    """
     now = datetime.now(timezone.utc)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = today_start - timedelta(days=7)
     month_start = today_start.replace(day=1)
-    
+
+    # Base filter applied to EVERY aggregation pipeline — verified & not deleted
+    _base_match = {"is_verified": True, "is_deleted": {"$ne": True}}
+
     # Pipeline for aggregation
     pipeline = [
+        {"$match": _base_match},
         {"$group": {
             "_id": "$status",
             "count": {"$sum": 1},
             "total_amount": {"$sum": "$amount"}
         }}
     ]
-    
+
     status_stats = await db.payments.aggregate(pipeline).to_list(100)
     status_dict = {s["_id"]: {"count": s["count"], "amount": s["total_amount"]} for s in status_stats}
-    
+
     # Today's stats
     today_pipeline = [
-        {"$match": {"created_at": {"$gte": today_start.isoformat()}}},
+        {"$match": {**_base_match, "created_at": {"$gte": today_start.isoformat()}}},
         {"$group": {
             "_id": None,
             "count": {"$sum": 1},
@@ -1542,10 +1559,10 @@ async def get_payment_dashboard_stats():
     ]
     today_stats = await db.payments.aggregate(today_pipeline).to_list(1)
     today = today_stats[0] if today_stats else {"count": 0, "total_amount": 0, "paid_amount": 0, "paid_count": 0}
-    
+
     # This week's stats
     week_pipeline = [
-        {"$match": {"created_at": {"$gte": week_start.isoformat()}}},
+        {"$match": {**_base_match, "created_at": {"$gte": week_start.isoformat()}}},
         {"$group": {
             "_id": None,
             "count": {"$sum": 1},
@@ -1556,10 +1573,10 @@ async def get_payment_dashboard_stats():
     ]
     week_stats = await db.payments.aggregate(week_pipeline).to_list(1)
     week = week_stats[0] if week_stats else {"count": 0, "total_amount": 0, "paid_amount": 0, "paid_count": 0}
-    
+
     # This month's stats
     month_pipeline = [
-        {"$match": {"created_at": {"$gte": month_start.isoformat()}}},
+        {"$match": {**_base_match, "created_at": {"$gte": month_start.isoformat()}}},
         {"$group": {
             "_id": None,
             "count": {"$sum": 1},
@@ -1570,9 +1587,10 @@ async def get_payment_dashboard_stats():
     ]
     month_stats = await db.payments.aggregate(month_pipeline).to_list(1)
     month = month_stats[0] if month_stats else {"count": 0, "total_amount": 0, "paid_amount": 0, "paid_count": 0}
-    
+
     # Source-wise stats
     source_pipeline = [
+        {"$match": _base_match},
         {"$group": {
             "_id": "$source",
             "count": {"$sum": 1},
@@ -1581,9 +1599,12 @@ async def get_payment_dashboard_stats():
         }}
     ]
     source_stats = await db.payments.aggregate(source_pipeline).to_list(100)
-    
-    # Pending links count
-    pending_count = await db.payments.count_documents({"status": {"$in": ["link_created", "link_sent"]}})
+
+    # Pending links count (also restricted to non-deleted, verified-initiated)
+    pending_count = await db.payments.count_documents(
+        {"is_deleted": {"$ne": True},
+         "status": {"$in": ["link_created", "link_sent"]}}
+    )
     
     return {
         "overview": {

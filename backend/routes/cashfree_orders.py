@@ -1750,6 +1750,98 @@ async def sync_all_orders(request: Request, max_orders: int = Query(200, ge=1, l
     return await _sync_pending_orders(max_orders=max_orders)
 
 
+@router.post("/orders/backfill-verification")
+@limiter.limit(RATE_LIMIT_SENSITIVE)
+async def backfill_verification(request: Request, dry_run: bool = Query(False)):
+    """One-time admin endpoint: retroactively verify all historical paid orders.
+
+    Iterates every order whose status is 'paid' but whose `is_verified` flag is
+    missing or False, calls the Cashfree ``GET /orders/{id}/payments`` API for
+    each one, and marks it verified if the API confirms SUCCESS.
+
+    Orders whose API call fails or returns a non-SUCCESS status are left with
+    `is_verified=False` — they remain hidden from the CRM by default.
+
+    Pass ``dry_run=true`` to preview what would be changed without writing.
+    Auth: requires admin token header.
+    """
+    _require_admin_token(request)
+
+    if not CASHFREE_PRODUCTION_APP_ID or not CASHFREE_PRODUCTION_SECRET_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="Cashfree credentials not configured — cannot verify"
+        )
+
+    # Find all paid orders not yet verified (or is_verified missing)
+    candidates = await db.cashfree_orders.find(
+        {
+            "status": {"$in": ["paid", "success", "successful", "captured",
+                               "completed", "settled", "confirmed"]},
+            "is_deleted": {"$ne": True},
+            "$or": [{"is_verified": {"$exists": False}}, {"is_verified": False}],
+        },
+        {"_id": 0, "order_id": 1, "amount": 1, "customer_name": 1}
+    ).to_list(5000)
+
+    results = {"total": len(candidates), "verified": 0, "failed": 0, "dry_run": dry_run, "details": []}
+
+    import httpx as _httpx
+
+    for order in candidates:
+        oid = order.get("order_id")
+        if not oid:
+            continue
+        try:
+            async with _httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(
+                    f"https://api.cashfree.com/pg/orders/{oid}/payments",
+                    headers={
+                        "x-api-version": "2023-08-01",
+                        "x-client-id": CASHFREE_PRODUCTION_APP_ID,
+                        "x-client-secret": CASHFREE_PRODUCTION_SECRET_KEY,
+                    }
+                )
+            if resp.status_code != 200:
+                results["failed"] += 1
+                results["details"].append({"order_id": oid, "result": "api_error", "http": resp.status_code})
+                continue
+
+            payments = resp.json()
+            if not isinstance(payments, list):
+                payments = [payments]
+
+            success_pay = next(
+                (p for p in payments if str(p.get("payment_status", "")).upper() == "SUCCESS"),
+                None
+            )
+            if success_pay and float(success_pay.get("payment_amount", 0)) > 10:
+                verified_at = (
+                    success_pay.get("payment_completion_time")
+                    or success_pay.get("payment_time")
+                    or datetime.now(timezone.utc).isoformat()
+                )
+                if not dry_run:
+                    await db.cashfree_orders.update_one(
+                        {"order_id": oid},
+                        {"$set": {"is_verified": True, "is_verified_at": verified_at}}
+                    )
+                results["verified"] += 1
+                results["details"].append({"order_id": oid, "result": "verified", "amount": success_pay.get("payment_amount")})
+            else:
+                results["failed"] += 1
+                results["details"].append({"order_id": oid, "result": "not_confirmed_by_api"})
+        except Exception as e:
+            results["failed"] += 1
+            results["details"].append({"order_id": oid, "result": "exception", "error": str(e)})
+
+    logger.info(
+        f"[backfill-verification] dry_run={dry_run} total={results['total']} "
+        f"verified={results['verified']} failed={results['failed']}"
+    )
+    return results
+
+
 async def cashfree_reconcile_loop(interval_seconds: int = 300):
     """Background task: every N seconds, reconcile pending orders with Cashfree.
 
