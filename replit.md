@@ -24,6 +24,26 @@ ASR Enterprises is a full-stack web application with a Create React App frontend
 - Run command starts FastAPI on `0.0.0.0:${PORT:-5000}` and serves the compiled React app from `frontend/build`.
 - Frontend production dependencies were aligned for normal npm install: React 18, React DOM 18, date-fns 3, ESLint 8, AJV 8.
 - The public website theme uses a premium light solar palette with sunlit gold, solar-glass blue, emerald CTA accents, and visible solar-panel grid/array effects on the homepage hero and zero-bill section.
+## April 18, 2026 — Payment Routing Fix + Shop Management Overhaul (Session 6)
+
+### Payment Order Routing Fix
+- **Bug**: `_mark_order_paid` in `cashfree_orders.py` used `ptype or "site_visit"` as a fallback, causing solar-service payments (ptype="booking") to be stored with `booking_type="booking"` instead of `"book_solar_service"`. Frontend site-visit tab filtered by `booking_type=="site_visit"`, and solar-service tab had no exclusion.
+- **Fix**: `booking_type` is now explicitly set: `"site_visit"` when ptype is `"site_visit"`, otherwise `"book_solar_service"` for all other payment types.
+- **Fix**: `GET /service/bookings` now filters `{"booking_type": {"$ne": "site_visit"}}` to exclude site-visit records from the Solar Service tab.
+
+### Shop Management — Product Form Overhaul
+- **Bug fixed**: `handleSubmit` showed generic "Failed to save product" with no details; added name/price validation with clear error messages; API error detail is now surfaced to user.
+- **Bug fixed**: `resetForm()` was missing `wire_type`, `wire_size`, `service_type` fields — form state was stale after reset.
+- **Bug fixed**: `handleEdit()` was missing all new fields — editing a product lost wire/service/spec data.
+- **Bulk image upload**: `handleImageUpload` now loops over `e.target.files` (multiple); file input has `multiple` attribute; upload button text updated to say "select multiple".
+- **Enhanced product specs**: Added 5 new fields to backend `Product` model: `electrical_specs`, `mechanical_specs`, `warranty_info`, `shipping_info`, `product_highlights`.
+- **New form sections** (shown for solar_panel/inverter/battery/accessory categories):
+  - Product Highlights (textarea, one bullet per line)
+  - Electrical Specifications (dynamic key-value table, new `SpecTableEditor` component)
+  - Mechanical Specifications (same editor)
+  - Warranty Information (same editor)
+  - Shipping & Returns Info (textarea)
+
 ## April 18, 2026 — Critical DB Routing Fix + Campaign/Pagination (Session 5)
 
 ### Root Cause Fixed: All Routes Pointing to Wrong Database

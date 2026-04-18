@@ -1500,6 +1500,11 @@ class Product(BaseModel):
     sku: str = ""
     brand: str = ""
     specifications: Dict[str, Any] = {}
+    electrical_specs: Dict[str, str] = {}   # e.g. {"Peak Power": "730W", "Efficiency": "23.5%"}
+    mechanical_specs: Dict[str, str] = {}   # e.g. {"Weight": "38.3 kg", "Frame": "Anodized Aluminium"}
+    warranty_info: Dict[str, str] = {}      # e.g. {"Product Warranty": "15-year", "Performance": "30-year"}
+    shipping_info: str = ""
+    product_highlights: List[str] = []     # Bullet-point feature list
     images: List[str] = []  # List of image URLs
     is_active: bool = True
     is_featured: bool = False
@@ -7465,8 +7470,8 @@ async def book_solar_service(request: Request, data: Dict[str, Any]):
 
 @api_router.get("/service/bookings")
 async def get_solar_service_bookings(status: str = None, limit: int = 50):
-    """Admin: Get all solar service bookings"""
-    query = {}
+    """Admin: Get all solar service bookings (excludes site visits)"""
+    query = {"booking_type": {"$ne": "site_visit"}}
     if status:
         query["status"] = status
     

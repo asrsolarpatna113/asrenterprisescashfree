@@ -1529,7 +1529,7 @@ async def _mark_order_paid(
                 "price": float(payment_amount),
                 "payment_status": "paid",
                 "status": "confirmed",
-                "booking_type": ptype or "site_visit",
+                "booking_type": "site_visit" if ptype == "site_visit" else "book_solar_service",
                 "notes": notes_text,
                 "cashfree_payment_id": cf_payment_id,
                 "paid_at": payment_time,

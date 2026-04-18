@@ -96,6 +96,61 @@ const DistrictFeesConfig = () => {
   );
 };
 
+// Reusable key-value spec table editor used in product form
+const SpecTableEditor = ({ title, icon: Icon, data = {}, onChange, placeholder = "e.g. 730W" }) => {
+  const [newKey, setNewKey] = useState("");
+  const [newVal, setNewVal] = useState("");
+
+  const addRow = () => {
+    if (!newKey.trim() || !newVal.trim()) return;
+    onChange({ ...data, [newKey.trim()]: newVal.trim() });
+    setNewKey(""); setNewVal("");
+  };
+
+  const removeRow = (key) => {
+    const copy = { ...data };
+    delete copy[key];
+    onChange(copy);
+  };
+
+  return (
+    <div className="md:col-span-2 bg-blue-900/10 border border-sky-200 rounded-xl p-4">
+      <h3 className="text-[#0a355e] font-semibold mb-3 flex items-center gap-2 text-sm">
+        {Icon && <Icon className="w-4 h-4" />} {title}
+      </h3>
+      {Object.entries(data).length > 0 && (
+        <table className="w-full text-sm mb-3">
+          <tbody>
+            {Object.entries(data).map(([k, v]) => (
+              <tr key={k} className="border-b border-sky-100">
+                <td className="py-1 pr-2 text-gray-600 font-medium w-1/2">{k}</td>
+                <td className="py-1 pr-2 text-[#0a355e]">{v}</td>
+                <td className="py-1 w-8">
+                  <button type="button" onClick={() => removeRow(k)} className="text-red-400 hover:text-red-600">
+                    <X className="w-3 h-3" />
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <div className="flex gap-2">
+        <input type="text" value={newKey} onChange={e => setNewKey(e.target.value)}
+          placeholder="Parameter name" onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), addRow())}
+          className="flex-1 px-3 py-1.5 bg-white border border-sky-200 rounded-lg text-[#0a355e] text-sm" />
+        <input type="text" value={newVal} onChange={e => setNewVal(e.target.value)}
+          placeholder={placeholder} onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), addRow())}
+          className="flex-1 px-3 py-1.5 bg-white border border-sky-200 rounded-lg text-[#0a355e] text-sm" />
+        <button type="button" onClick={addRow}
+          className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-sm hover:bg-amber-600 flex items-center gap-1">
+          <Plus className="w-3 h-3" /> Add
+        </button>
+      </div>
+    </div>
+  );
+};
+
 const categoryOptions = [
   { id: "solar_panel", name: "Solar Panels", icon: Sun },
   { id: "inverter", name: "Inverters", icon: Zap },
@@ -142,10 +197,16 @@ export const ProductManagement = () => {
     delivery_districts: [],
     delivery_fees: {},
     // Wire-specific fields
-    wire_type: "AC", // AC or DC
-    wire_size: "4sqmm", // 4sqmm or 6sqmm
+    wire_type: "AC",
+    wire_size: "4sqmm",
     // Service-specific fields
-    service_type: "cleaning"
+    service_type: "cleaning",
+    // Enhanced product detail fields
+    electrical_specs: {},
+    mechanical_specs: {},
+    warranty_info: {},
+    shipping_info: "",
+    product_highlights: []
   });
 
   const [imageUrl, setImageUrl] = useState("");
@@ -294,66 +355,66 @@ export const ProductManagement = () => {
     }
   };
 
-  // Handle image upload from mobile/desktop storage
+  // Handle image upload from mobile/desktop storage (supports multiple files)
   const handleImageUpload = async (e, productId = null) => {
-    const file = e.target.files[0];
-    if (!file) return;
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
 
-    // Validate file type
     const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
-    if (!allowedTypes.includes(file.type)) {
-      alert('Please select a valid image file (JPEG, PNG, WebP, GIF)');
-      return;
-    }
-
-    // Validate file size (5MB max)
-    if (file.size > 5 * 1024 * 1024) {
-      alert('Image size must be less than 5MB');
-      return;
+    for (const file of files) {
+      if (!allowedTypes.includes(file.type)) {
+        alert(`${file.name}: Invalid type. Use JPEG, PNG, WebP or GIF.`);
+        return;
+      }
+      if (file.size > 5 * 1024 * 1024) {
+        alert(`${file.name}: Must be under 5 MB.`);
+        return;
+      }
     }
 
     setUploadingImage(true);
 
     try {
       if (productId) {
-        // Upload to existing product
-        const formDataUpload = new FormData();
-        formDataUpload.append('file', file);
-        const res = await axios.post(`${API}/shop/products/${productId}/upload-image`, formDataUpload, {
-          headers: { 'Content-Type': 'multipart/form-data' }
-        });
-        if (res.data.status === 'success') {
-          fetchProducts();
-          alert('Image uploaded successfully!');
+        // Upload to existing product (one at a time)
+        for (const file of files) {
+          const formDataUpload = new FormData();
+          formDataUpload.append('file', file);
+          await axios.post(`${API}/shop/products/${productId}/upload-image`, formDataUpload, {
+            headers: { 'Content-Type': 'multipart/form-data' }
+          });
         }
+        fetchProducts();
+        alert(`${files.length} image${files.length > 1 ? 's' : ''} uploaded successfully!`);
       } else {
-        // Add to form for new product - convert to base64
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          setFormData(prev => ({
-            ...prev,
-            images: [...prev.images, reader.result]
-          }));
-        };
-        reader.readAsDataURL(file);
+        // Add to form for new product — convert each file to base64
+        const readAll = files.map(file => new Promise(resolve => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result);
+          reader.readAsDataURL(file);
+        }));
+        const base64s = await Promise.all(readAll);
+        setFormData(prev => ({ ...prev, images: [...prev.images, ...base64s] }));
       }
     } catch (err) {
       console.error('Image upload error:', err);
-      alert('Failed to upload image. Please try again.');
+      alert('Failed to upload image(s). Please try again.');
     } finally {
       setUploadingImage(false);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!formData.name?.trim()) { alert("Product name is required."); return; }
+    const price = parseFloat(formData.price);
+    if (!price || price <= 0) { alert("Please enter a valid price."); return; }
+
     try {
       const data = {
         ...formData,
-        price: parseFloat(formData.price) || 0,
+        price,
         sale_price: formData.sale_price ? parseFloat(formData.sale_price) : null,
         stock: parseInt(formData.stock) || 0
       };
@@ -371,7 +432,8 @@ export const ProductManagement = () => {
       fetchShopStats();
     } catch (err) {
       console.error("Error saving product:", err);
-      alert("Failed to save product");
+      const msg = err?.response?.data?.detail || err?.message || "Unknown error";
+      alert(`Failed to save product: ${msg}`);
     }
   };
 
@@ -394,7 +456,15 @@ export const ProductManagement = () => {
       pickup_available: product.pickup_available,
       images: product.images || [],
       delivery_districts: product.delivery_districts || [],
-      delivery_fees: product.delivery_fees || {}
+      delivery_fees: product.delivery_fees || {},
+      wire_type: product.wire_type || "AC",
+      wire_size: product.wire_size || "4sqmm",
+      service_type: product.service_type || "cleaning",
+      electrical_specs: product.electrical_specs || {},
+      mechanical_specs: product.mechanical_specs || {},
+      warranty_info: product.warranty_info || {},
+      shipping_info: product.shipping_info || "",
+      product_highlights: product.product_highlights || []
     });
     setShowForm(true);
   };
@@ -449,7 +519,15 @@ export const ProductManagement = () => {
       pickup_available: true,
       images: [],
       delivery_districts: [],
-      delivery_fees: {}
+      delivery_fees: {},
+      wire_type: "AC",
+      wire_size: "4sqmm",
+      service_type: "cleaning",
+      electrical_specs: {},
+      mechanical_specs: {},
+      warranty_info: {},
+      shipping_info: "",
+      product_highlights: []
     });
   };
 
@@ -1223,6 +1301,65 @@ export const ProductManagement = () => {
                     </div>
                   )}
 
+                  {/* ── Enhanced Specs (solar_panel / inverter / battery / accessory) ── */}
+                  {!["wire","service"].includes(formData.category) && (<>
+                    {/* Product Highlights */}
+                    <div className="md:col-span-2 bg-amber-50 border border-amber-200 rounded-xl p-4">
+                      <h3 className="text-[#0a355e] font-semibold mb-2 flex items-center gap-2 text-sm">
+                        <Star className="w-4 h-4 text-amber-500" /> Product Highlights
+                      </h3>
+                      <textarea
+                        rows={3}
+                        value={(formData.product_highlights || []).join("\n")}
+                        onChange={e => setFormData({...formData, product_highlights: e.target.value.split("\n").filter(Boolean)})}
+                        className="w-full px-3 py-2 bg-white border border-amber-200 rounded-lg text-[#0a355e] text-sm"
+                        placeholder={"One feature per line:\nBiFacial technology for rear power generation\nMBBR anti-LID treatment\nIP68 junction box"}
+                      />
+                      <p className="text-gray-500 text-xs mt-1">Each line becomes a bullet point on the product page</p>
+                    </div>
+
+                    {/* Electrical Specs */}
+                    <SpecTableEditor
+                      title="Electrical Specifications"
+                      icon={Zap}
+                      data={formData.electrical_specs || {}}
+                      onChange={val => setFormData({...formData, electrical_specs: val})}
+                      placeholder="e.g. 730W"
+                    />
+
+                    {/* Mechanical Specs */}
+                    <SpecTableEditor
+                      title="Mechanical Specifications"
+                      icon={Settings}
+                      data={formData.mechanical_specs || {}}
+                      onChange={val => setFormData({...formData, mechanical_specs: val})}
+                      placeholder="e.g. 38.3 kg"
+                    />
+
+                    {/* Warranty Info */}
+                    <SpecTableEditor
+                      title="Warranty Information"
+                      icon={CheckCircle}
+                      data={formData.warranty_info || {}}
+                      onChange={val => setFormData({...formData, warranty_info: val})}
+                      placeholder="e.g. 15 years"
+                    />
+
+                    {/* Shipping & Returns */}
+                    <div className="md:col-span-2 bg-blue-900/10 border border-sky-200 rounded-xl p-4">
+                      <h3 className="text-[#0a355e] font-semibold mb-2 flex items-center gap-2 text-sm">
+                        <Package className="w-4 h-4" /> Shipping & Returns Info
+                      </h3>
+                      <textarea
+                        rows={3}
+                        value={formData.shipping_info || ""}
+                        onChange={e => setFormData({...formData, shipping_info: e.target.value})}
+                        className="w-full px-3 py-2 bg-white border border-sky-200 rounded-lg text-[#0a355e] text-sm"
+                        placeholder="Dispatched within 3-5 working days. Free shipping on orders above ₹5000. Returns accepted within 7 days of delivery."
+                      />
+                    </div>
+                  </>)}
+
                   {/* Images - Available for all categories including service */}
                   <div className="md:col-span-2">
                       <label className="text-gray-500 text-sm mb-1 block">Product Images {formData.category === "service" && "(Service Photos)"}</label>
@@ -1233,6 +1370,7 @@ export const ProductManagement = () => {
                           type="file"
                           ref={fileInputRef}
                           accept="image/jpeg,image/png,image/webp,image/gif"
+                          multiple
                           onChange={(e) => handleImageUpload(e)}
                           className="hidden"
                           id="mobile-image-upload"
@@ -1243,10 +1381,10 @@ export const ProductManagement = () => {
                         >
                           <Upload className="w-5 h-5 text-amber-400" />
                           <span className="text-gray-600">
-                            {uploadingImage ? 'Uploading...' : 'Upload from Mobile/Gallery'}
+                            {uploadingImage ? 'Uploading...' : 'Upload Photos (select multiple)'}
                           </span>
                         </label>
-                        <p className="text-gray-500 text-xs mt-1">Max 5MB • JPEG, PNG, WebP, GIF</p>
+                        <p className="text-gray-500 text-xs mt-1">Hold Ctrl/Cmd to select multiple • Max 5 MB each • JPEG, PNG, WebP, GIF</p>
                       </div>
 
                       {/* Or paste URL */}
