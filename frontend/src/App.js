@@ -359,7 +359,7 @@ const SolarInquiryForm = () => {
     return () => clearTimeout(timerRef.current);
   }, [resendTimer]);
 
-  // Send OTP using backend API
+  // Send OTP using backend API (primary) with MSG91 widget fallback
   const handleSendOTP = async () => {
     if (!formData.phone || formData.phone.length < 10) {
       alert("Please enter a valid 10-digit mobile number");
@@ -367,6 +367,7 @@ const SolarInquiryForm = () => {
     }
     
     const phoneClean = formData.phone.replace(/\D/g, '').slice(-10);
+    const phoneWithCountry = '91' + phoneClean;
     
     setOtpLoading(true);
     setError("");
@@ -376,37 +377,47 @@ const SolarInquiryForm = () => {
       const response = await axios.post(`${API}/otp/send`, { mobile: phoneClean });
       if (response.data.success) {
         setOtpSent(true);
-        setResendTimer(30);
+        setResendTimer(60);
         setOtpLoading(false);
         return;
       }
+      console.warn("[InquiryForm] Backend OTP returned failure:", response.data.message);
     } catch (backendErr) {
       console.warn("[InquiryForm] Backend OTP failed:", backendErr.message);
     }
     
     // FALLBACK: Widget
     try {
-      let phoneNumber = '91' + phoneClean;
+      if (typeof window.loadMSG91 === 'function') {
+        try { await window.loadMSG91(); } catch(e) {}
+      }
       if (typeof window.sendOtp === 'function') {
-        await window.sendOtp(phoneNumber);
+        await window.sendOtp(phoneWithCountry);
+        setOtpSent(true);
+        setResendTimer(60);
       } else if (typeof window.initSendOTP === 'function') {
         const config = {
           widgetId: MSG91_WIDGET_ID,
           tokenAuth: MSG91_AUTH_TOKEN,
-          identifier: phoneNumber,
+          identifier: phoneWithCountry,
           exposeMethods: true,
           success: (data) => { setOtpVerified(true); setVerifyLoading(false); },
           failure: (error) => { setError("OTP verification failed."); setVerifyLoading(false); }
         };
         window.initSendOTP(config);
         await new Promise(resolve => setTimeout(resolve, 1500));
-        if (typeof window.sendOtp === 'function') await window.sendOtp(phoneNumber);
+        if (typeof window.sendOtp === 'function') {
+          await window.sendOtp(phoneWithCountry);
+          setOtpSent(true);
+          setResendTimer(60);
+        } else {
+          setError("OTP service is not ready. Please refresh and try again.");
+        }
+      } else {
+        setError("OTP service unavailable. Please try again or contact us directly.");
       }
-      setOtpSent(true);
-      setResendTimer(30);
     } catch (err) {
-      setOtpSent(true);
-      setResendTimer(30);
+      setError("Could not send OTP. Please try again.");
     } finally {
       setOtpLoading(false);
     }
@@ -3004,75 +3015,73 @@ const LeadCapturePage = () => {
     return () => clearTimeout(timerRef.current);
   }, [resendTimer]);
 
-  // Send OTP
+  // Send OTP (backend-first, widget fallback)
   const handleSendOTP = async () => {
     if (!formData.phone || formData.phone.length < 10) {
       alert("Please enter a valid 10-digit mobile number");
       return;
     }
     
-    let phoneNumber = formData.phone.replace(/\D/g, '');
-    if (phoneNumber.length === 10) {
-      phoneNumber = '91' + phoneNumber;
-    }
+    const phoneClean = formData.phone.replace(/\D/g, '').slice(-10);
+    const phoneWithCountry = '91' + phoneClean;
     
     setOtpLoading(true);
     setError("");
     
     try {
+      // PRIMARY: Backend API
+      const response = await axios.post(`${API}/otp/send`, { mobile: phoneClean });
+      if (response.data.success) {
+        setOtpSent(true);
+        setResendTimer(60);
+        setOtpLoading(false);
+        return;
+      }
+      console.warn("[Form] Backend OTP returned failure:", response.data.message);
+    } catch (backendErr) {
+      console.warn("[Form] Backend OTP API failed:", backendErr.message);
+    }
+    
+    // FALLBACK: Widget
+    try {
+      if (typeof window.loadMSG91 === 'function') {
+        try { await window.loadMSG91(); } catch(e) {}
+      }
       if (typeof window.sendOtp === 'function') {
-        const response = await window.sendOtp(phoneNumber);
-        if (response && response.type === 'error') {
-          setError(response?.message || "Failed to send OTP.");
+        const resp = await window.sendOtp(phoneWithCountry);
+        if (resp && resp.type === 'error') {
+          setError(resp.message || "Failed to send OTP. Please try again.");
         } else {
           setOtpSent(true);
-          setResendTimer(30);
+          setResendTimer(60);
         }
       } else if (typeof window.initSendOTP === 'function') {
         const config = {
           widgetId: MSG91_WIDGET_ID,
           tokenAuth: MSG91_AUTH_TOKEN,
-          identifier: phoneNumber,
+          identifier: phoneWithCountry,
           exposeMethods: true,
-          success: (data) => {
-            setOtpVerified(true);
-            setVerifyLoading(false);
-          },
-          failure: (error) => {
-            setError("OTP verification failed.");
-            setVerifyLoading(false);
-          }
+          success: (data) => { setOtpVerified(true); setVerifyLoading(false); },
+          failure: (error) => { setError("OTP verification failed."); setVerifyLoading(false); }
         };
         window.initSendOTP(config);
-        
-        setTimeout(async () => {
-          if (typeof window.sendOtp === 'function') {
-            try {
-              const response = await window.sendOtp(phoneNumber);
-              if (response && response.type === 'error') {
-                setError(response?.message || "Failed to send OTP.");
-              } else {
-                setOtpSent(true);
-                setResendTimer(30);
-              }
-            } catch (err) {
-              setOtpSent(true);
-              setResendTimer(30);
-            }
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        if (typeof window.sendOtp === 'function') {
+          const resp2 = await window.sendOtp(phoneWithCountry);
+          if (resp2 && resp2.type === 'error') {
+            setError(resp2.message || "Failed to send OTP.");
           } else {
             setOtpSent(true);
-            setResendTimer(30);
+            setResendTimer(60);
           }
-          setOtpLoading(false);
-        }, 1500);
-        return;
+        } else {
+          setError("OTP service not ready. Please refresh the page and try again.");
+        }
       } else {
-        setOtpSent(true);
-        setResendTimer(30);
+        setError("OTP service unavailable. Please contact us directly.");
       }
     } catch (err) {
-      setOtpSent(true);
-      setResendTimer(30);
+      setError("Could not send OTP. Please try again.");
     } finally {
       setOtpLoading(false);
     }

@@ -27,10 +27,12 @@ logger = logging.getLogger(__name__)
 
 # Rate Limiting Configuration
 RATE_LIMIT_DEFAULT = "100/minute"
-RATE_LIMIT_AUTH = "5/minute"
+RATE_LIMIT_AUTH = "10/minute"
 RATE_LIMIT_PAYMENT = "10/minute"
 RATE_LIMIT_ADMIN = "30/minute"
-RATE_LIMIT_SENSITIVE = "3/minute"
+RATE_LIMIT_SENSITIVE = "5/minute"
+RATE_LIMIT_OTP_SEND = "5/minute"
+RATE_LIMIT_OTP_VERIFY = "15/minute"
 
 # IP Blocking Configuration
 MAX_FAILED_ATTEMPTS = 10

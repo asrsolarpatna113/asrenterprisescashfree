@@ -58,15 +58,18 @@ export const AdminLogin = ({ onLogin }) => {
       
       if (response.data.success) {
         setOtpSent(true);
-        setResendTimer(30);
+        setResendTimer(60);
         const method = response.data.method || "";
         if (method === "email_fallback") {
           setSuccess("OTP sent to your registered email (SMS unavailable). Check your inbox.");
         } else {
-          setSuccess("OTP sent successfully! Check your phone.");
+          setSuccess("OTP sent to your mobile! Check your SMS inbox.");
         }
         setOtpLoading(false);
         return;
+      } else {
+        // Backend explicitly said it failed
+        console.warn("[AdminLogin] Backend OTP send failed:", response.data);
       }
     } catch (backendErr) {
       console.warn("[AdminLogin] Backend OTP failed, trying widget:", backendErr?.response?.data || backendErr.message);
@@ -85,22 +88,17 @@ export const AdminLogin = ({ onLogin }) => {
         const widgetResp = await window.sendOtp(phoneNumber);
         console.log("[AdminLogin] Widget sendOtp response:", widgetResp);
         setOtpSent(true);
-        setResendTimer(30);
-        setSuccess("OTP sent! Check your phone.");
+        setResendTimer(60);
+        setSuccess("OTP sent via widget! Check your SMS.");
         setOtpLoading(false);
         return;
       }
       
-      // If widget not available, still show OTP input (backend OTP may have been stored)
-      setOtpSent(true);
-      setResendTimer(30);
-      setSuccess("OTP sent! Please enter the code.");
+      // Neither backend nor widget could send OTP
+      setError("OTP could not be sent. Please check your MSG91 configuration or contact support.");
     } catch (widgetErr) {
       console.error("[AdminLogin] All OTP methods failed:", widgetErr);
-      // Still show OTP input as backend may have stored OTP
-      setOtpSent(true);
-      setResendTimer(30);
-      setSuccess("OTP sent! Please check your phone.");
+      setError("OTP service unavailable. Please try again or use Email + Password login.");
     }
     
     setOtpLoading(false);

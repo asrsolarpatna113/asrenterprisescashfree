@@ -50,7 +50,9 @@ from security import (
     RATE_LIMIT_AUTH,
     RATE_LIMIT_PAYMENT,
     RATE_LIMIT_ADMIN,
-    RATE_LIMIT_SENSITIVE
+    RATE_LIMIT_SENSITIVE,
+    RATE_LIMIT_OTP_SEND,
+    RATE_LIMIT_OTP_VERIFY,
 )
 
 # Import Redis cache module
@@ -486,6 +488,14 @@ async def create_indexes():
         # WhatsApp opt-out collection — must be fast for every outgoing message
         await db.wa_optouts.create_index([("phone", 1)], unique=True)
         await db.wa_optouts.create_index([("opted_out", 1)])
+
+        # OTP store — TTL index auto-deletes expired OTPs after 10 minutes
+        await db.otp_store.create_index([("mobile", 1)], unique=True)
+        await db.otp_store.create_index(
+            [("created_at", 1)],
+            expireAfterSeconds=600,  # 10 minutes (5-min expiry + 5-min grace)
+            name="otp_store_ttl"
+        )
 
         # Products collection indexes
         await db.products.create_index([("category", 1)])
@@ -7002,6 +7012,10 @@ MSG91_AUTH_KEY = os.environ.get("MSG91_AUTH_KEY", "")
 MSG91_SENDER_ID = os.environ.get("MSG91_SENDER_ID", "ASRSOL")
 MSG91_WIDGET_ID = os.environ.get("MSG91_WIDGET_ID", "")
 MSG91_TOKEN_AUTH = os.environ.get("MSG91_TOKEN_AUTH", "")
+# DLT-approved OTP template ID from MSG91 dashboard (required for India delivery)
+MSG91_OTP_TEMPLATE_ID = os.environ.get("MSG91_OTP_TEMPLATE_ID", "")
+# MSG91 Flow ID for flow-based OTP (optional, leave blank if not configured)
+MSG91_FLOW_ID = os.environ.get("MSG91_FLOW_ID", "")
 
 
 def _require_msg91() -> None:
@@ -7041,13 +7055,15 @@ async def _send_otp_impl(data: Dict[str, Any]):
     otp_code = str(random.randint(100000, 999999))
     
     # Store OTP in MongoDB with 5-minute expiry
+    # created_at stored as datetime (not string) so MongoDB TTL index can auto-delete
+    now_utc = datetime.now(timezone.utc)
     await db.otp_store.update_one(
         {"mobile": mobile_clean},
         {"$set": {
             "mobile": mobile_clean,
             "otp": otp_code,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
+            "created_at": now_utc,
+            "expires_at": (now_utc + timedelta(minutes=5)).isoformat(),
             "verified": False,
             "attempts": 0
         }},
@@ -7057,24 +7073,29 @@ async def _send_otp_impl(data: Dict[str, Any]):
     # Try sending via MSG91 OTP API
     sent = False
     send_method = "none"
+    msg91_request_id = None
     
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            # Method 1: MSG91 OTP API v5 (primary - requires DLT-approved template)
+            # Method 1: MSG91 OTP API v5 (primary)
+            # Include template_id if set for DLT compliance (required for India SMS delivery)
             try:
+                otp_payload = {
+                    "mobile": mobile_with_country,
+                    "otp": otp_code,
+                    "otp_length": 6,
+                    "otp_expiry": 5,
+                    "sender": MSG91_SENDER_ID
+                }
+                if MSG91_OTP_TEMPLATE_ID:
+                    otp_payload["template_id"] = MSG91_OTP_TEMPLATE_ID
                 otp_response = await client.post(
                     "https://control.msg91.com/api/v5/otp",
                     headers={
                         "authkey": MSG91_AUTH_KEY,
                         "Content-Type": "application/json"
                     },
-                    json={
-                        "mobile": mobile_with_country,
-                        "otp": otp_code,
-                        "otp_length": 6,
-                        "otp_expiry": 5,
-                        "sender": MSG91_SENDER_ID
-                    }
+                    json=otp_payload
                 )
                 logger.info(f"[OTP] MSG91 OTP API response: {otp_response.status_code} - {otp_response.text[:300]}")
                 if otp_response.status_code == 200:
@@ -7082,34 +7103,12 @@ async def _send_otp_impl(data: Dict[str, Any]):
                     if resp_data.get("type") == "success":
                         sent = True
                         send_method = "msg91_otp_api"
+                        msg91_request_id = resp_data.get("request_id")
             except Exception as e:
                 logger.warning(f"[OTP] MSG91 OTP API failed: {e}")
 
-            # Method 2: MSG91 SMS API (Transactional route 4)
-            if not sent:
-                try:
-                    sms_msg = f"Your ASR Enterprises OTP is {otp_code}. Valid for 5 minutes. Do not share with anyone."
-                    sms_response = await client.get(
-                        "https://api.msg91.com/api/sendhttp.php",
-                        params={
-                            "authkey": MSG91_AUTH_KEY,
-                            "mobiles": mobile_with_country,
-                            "message": sms_msg,
-                            "sender": MSG91_SENDER_ID,
-                            "route": "4",
-                            "country": "91",
-                            "unicode": "0"
-                        }
-                    )
-                    logger.info(f"[OTP] MSG91 SMS API response: {sms_response.status_code} - {sms_response.text[:300]}")
-                    if sms_response.status_code == 200 and not sms_response.text.strip().startswith("E"):
-                        sent = True
-                        send_method = "msg91_sms_api"
-                except Exception as e:
-                    logger.warning(f"[OTP] MSG91 SMS API failed: {e}")
-
-            # Method 3: MSG91 Flow API
-            if not sent:
+            # Method 2: MSG91 Flow API (only if flow_id is configured)
+            if not sent and MSG91_FLOW_ID:
                 try:
                     flow_response = await client.post(
                         "https://api.msg91.com/api/v5/flow/",
@@ -7118,7 +7117,7 @@ async def _send_otp_impl(data: Dict[str, Any]):
                             "Content-Type": "application/json"
                         },
                         json={
-                            "flow_id": "default",
+                            "flow_id": MSG91_FLOW_ID,
                             "sender": MSG91_SENDER_ID,
                             "mobiles": mobile_with_country,
                             "OTP": otp_code
@@ -7147,6 +7146,13 @@ async def _send_otp_impl(data: Dict[str, Any]):
         except Exception as e:
             logger.warning(f"[OTP] Email fallback failed: {e}")
     
+    # Also store msg91_request_id to enable MSG91-side OTP verify as fallback
+    if msg91_request_id:
+        await db.otp_store.update_one(
+            {"mobile": mobile_clean},
+            {"$set": {"msg91_request_id": msg91_request_id}}
+        )
+
     if sent:
         logger.info(f"[OTP] OTP sent to {mobile_clean[-4:].rjust(10, '*')} via {send_method}")
         return {
@@ -7156,28 +7162,28 @@ async def _send_otp_impl(data: Dict[str, Any]):
             "method": send_method
         }
     else:
-        # OTP stored in DB even if SMS failed - for testing/dev
-        logger.warning(f"[OTP] SMS delivery failed but OTP stored in DB for {mobile_clean[-4:].rjust(10, '*')}")
+        # OTP stored in DB even if SMS failed
+        logger.warning(f"[OTP] SMS delivery failed for {mobile_clean[-4:].rjust(10, '*')} — OTP stored in DB only")
         return {
-            "success": True,
-            "type": "success", 
-            "message": f"OTP sent to +91 {mobile_clean[-4:].rjust(10, '*')}",
-            "method": "stored_only",
-            "note": "SMS delivery attempted via MSG91"
+            "success": False,
+            "type": "error",
+            "message": "Could not send OTP via SMS. Please check your MSG91 configuration (DLT template ID, sender ID) or contact support.",
+            "method": "failed",
+            "note": "OTP stored locally. Configure MSG91_OTP_TEMPLATE_ID for reliable India SMS delivery."
         }
 
 
 @api_router.post("/otp/send")
-@limiter.limit(RATE_LIMIT_AUTH)
+@limiter.limit(RATE_LIMIT_OTP_SEND)
 async def send_otp(request: Request, data: Dict[str, Any]):
     """Public OTP send endpoint (rate-limited)."""
     return await _send_otp_impl(data)
 
 
 @api_router.post("/otp/verify")
-@limiter.limit(RATE_LIMIT_AUTH)
+@limiter.limit(RATE_LIMIT_OTP_VERIFY)
 async def verify_otp(request: Request, data: Dict[str, Any]):
-    """Verify OTP against stored value"""
+    """Verify OTP against stored value (with MSG91 API as dual-verification fallback)"""
     mobile = data.get("mobile", "").replace(" ", "").replace("+", "")
     otp = data.get("otp", "").strip()
     
@@ -7186,66 +7192,85 @@ async def verify_otp(request: Request, data: Dict[str, Any]):
     
     mobile_clean = mobile[-10:] if len(mobile) >= 10 else mobile
     mobile_with_country = "91" + mobile_clean
+
+    async def _try_msg91_verify(request_id: str = None) -> bool:
+        """Try to verify OTP via MSG91's API (handles widget-sent OTPs too)."""
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                params = {"authkey": MSG91_AUTH_KEY, "mobile": mobile_with_country, "otp": otp}
+                if request_id:
+                    params["request_id"] = request_id
+                verify_resp = await client.post(
+                    "https://control.msg91.com/api/v5/otp/verify",
+                    params=params
+                )
+                logger.info(f"[OTP] MSG91 verify API: {verify_resp.status_code} - {verify_resp.text[:200]}")
+                if verify_resp.status_code == 200:
+                    resp_data = verify_resp.json()
+                    return resp_data.get("type") == "success"
+        except Exception as e:
+            logger.warning(f"[OTP] MSG91 verify API failed: {e}")
+        return False
     
-    # Check stored OTP
+    # Check stored OTP record
     stored = await db.otp_store.find_one({"mobile": mobile_clean}, {"_id": 0})
     
     if not stored:
-        # Try MSG91 verify API as fallback
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                verify_resp = await client.post(
-                    f"https://control.msg91.com/api/v5/otp/verify",
-                    params={
-                        "authkey": MSG91_AUTH_KEY,
-                        "mobile": mobile_with_country,
-                        "otp": otp
-                    }
-                )
-                logger.info(f"[OTP] MSG91 verify response: {verify_resp.status_code} - {verify_resp.text[:200]}")
-                if verify_resp.status_code == 200:
-                    resp_data = verify_resp.json()
-                    if resp_data.get("type") == "success":
-                        return {"success": True, "type": "success", "message": "OTP verified successfully"}
-        except Exception as e:
-            logger.warning(f"[OTP] MSG91 verify fallback failed: {e}")
-        
+        # No stored record — try MSG91 API (handles widget-initiated OTPs)
+        if await _try_msg91_verify():
+            logger.info(f"[OTP] OTP verified via MSG91 API (no local record) for ****{mobile_clean[-4:]}")
+            return {"success": True, "type": "success", "message": "OTP verified successfully"}
         raise HTTPException(status_code=400, detail="No OTP found. Please request a new OTP.")
     
     # Check expiry
-    expires_at = datetime.fromisoformat(stored["expires_at"].replace("Z", "+00:00")) if isinstance(stored["expires_at"], str) else stored["expires_at"]
-    if datetime.now(timezone.utc) > expires_at:
-        await db.otp_store.delete_one({"mobile": mobile_clean})
-        raise HTTPException(status_code=400, detail="OTP expired. Please request a new OTP.")
+    try:
+        expires_at_str = stored.get("expires_at", "")
+        expires_at = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
+        if datetime.now(timezone.utc) > expires_at:
+            await db.otp_store.delete_one({"mobile": mobile_clean})
+            raise HTTPException(status_code=400, detail="OTP expired. Please request a new OTP.")
+    except (ValueError, AttributeError):
+        pass  # If we can't parse expiry, continue and let attempt check handle it
     
     # Check attempts (max 5)
     if stored.get("attempts", 0) >= 5:
         await db.otp_store.delete_one({"mobile": mobile_clean})
         raise HTTPException(status_code=400, detail="Too many attempts. Please request a new OTP.")
     
-    # Verify OTP
+    # Verify against stored OTP (backend-generated)
     if stored["otp"] == otp:
         await db.otp_store.update_one(
             {"mobile": mobile_clean},
             {"$set": {"verified": True}}
         )
-        logger.info(f"[OTP] OTP verified for {mobile_clean[-4:].rjust(10, '*')}")
+        logger.info(f"[OTP] OTP verified (local) for ****{mobile_clean[-4:]}")
         return {"success": True, "type": "success", "message": "OTP verified successfully"}
-    else:
-        # Increment attempts
+    
+    # Stored OTP didn't match — try MSG91 API as dual fallback
+    # This handles cases where widget sends its own OTP (different from backend-generated)
+    request_id = stored.get("msg91_request_id")
+    if await _try_msg91_verify(request_id):
         await db.otp_store.update_one(
             {"mobile": mobile_clean},
-            {"$inc": {"attempts": 1}}
+            {"$set": {"verified": True}}
         )
-        remaining = 5 - stored.get("attempts", 0) - 1
-        raise HTTPException(
-            status_code=400, 
-            detail=f"Invalid OTP. {remaining} attempts remaining."
-        )
+        logger.info(f"[OTP] OTP verified via MSG91 API (dual-verify) for ****{mobile_clean[-4:]}")
+        return {"success": True, "type": "success", "message": "OTP verified successfully"}
+    
+    # Both verifications failed — increment attempts
+    await db.otp_store.update_one(
+        {"mobile": mobile_clean},
+        {"$inc": {"attempts": 1}}
+    )
+    remaining = max(0, 5 - stored.get("attempts", 0) - 1)
+    raise HTTPException(
+        status_code=400, 
+        detail=f"Invalid OTP. {remaining} attempt{'s' if remaining != 1 else ''} remaining."
+    )
 
 
 @api_router.post("/otp/resend")
-@limiter.limit(RATE_LIMIT_SENSITIVE)
+@limiter.limit(RATE_LIMIT_OTP_SEND)
 async def resend_otp(request: Request, data: Dict[str, Any]):
     """Resend OTP to mobile number"""
     _require_msg91()
@@ -7255,6 +7280,31 @@ async def resend_otp(request: Request, data: Dict[str, Any]):
     
     # Reuse send logic
     return await _send_otp_impl({"mobile": mobile})
+
+
+@api_router.get("/otp/status")
+async def otp_status():
+    """Admin diagnostic: check MSG91 OTP configuration status (no secrets exposed)."""
+    has_auth_key = bool(MSG91_AUTH_KEY)
+    has_template_id = bool(MSG91_OTP_TEMPLATE_ID)
+    has_flow_id = bool(MSG91_FLOW_ID)
+    has_widget = bool(MSG91_WIDGET_ID)
+    has_token_auth = bool(MSG91_TOKEN_AUTH)
+    return {
+        "msg91_configured": has_auth_key,
+        "sender_id": MSG91_SENDER_ID,
+        "dlt_template_id_set": has_template_id,
+        "flow_id_set": has_flow_id,
+        "widget_configured": has_widget and has_token_auth,
+        "recommendations": [
+            *([] if has_auth_key else ["Set MSG91_AUTH_KEY secret"]),
+            *([] if has_template_id else [
+                "Set MSG91_OTP_TEMPLATE_ID for DLT-compliant India SMS delivery. "
+                "Get this from MSG91 Dashboard → SMS → OTP Templates → DLT Template ID"
+            ]),
+            *([] if has_widget else ["Set MSG91_WIDGET_ID and MSG91_TOKEN_AUTH for widget-based OTP"]),
+        ]
+    }
 
 
 # =============================================
