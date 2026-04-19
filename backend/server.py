@@ -13062,18 +13062,28 @@ async def serve_spa(full_path: str, request: Request):
         og_block = _build_og_block(title, description, image, canonical)
         html = index_file.read_text(encoding="utf-8")
 
+        # Always strip any existing og:/twitter:/canonical tags first so there are
+        # no duplicates that could confuse social-media crawlers (WhatsApp reads the
+        # LAST occurrence, so leaving old static tags in place would override ours).
+        html = re.sub(r'<meta\s+property="og:[^"]*"[^>]*/?\s*>', "", html)
+        html = re.sub(r"<meta\s+property='og:[^']*'[^>]*/?\s*>", "", html)
+        html = re.sub(r'<meta\s+name="twitter:[^"]*"[^>]*/?\s*>', "", html)
+        html = re.sub(r"<meta\s+name='twitter:[^']*'[^>]*/?\s*>", "", html)
+        html = re.sub(r'<link\s+rel="canonical"[^>]*/?\s*>', "", html)
+        html = re.sub(r"<link\s+rel='canonical'[^>]*/?\s*>", "", html)
+
+        inject = og_block.replace("<!-- DYNAMIC_OG_START -->", "").replace("<!-- DYNAMIC_OG_END -->", "").strip()
+
         if "<!-- DYNAMIC_OG_START -->" in html:
-            # Built index.html has the placeholder markers — replace the block cleanly
+            # Built index.html has the placeholder markers — replace (already stripped above)
             html = re.sub(
                 r"<!-- DYNAMIC_OG_START -->.*?<!-- DYNAMIC_OG_END -->",
-                og_block,
+                inject,
                 html,
                 flags=re.DOTALL,
             )
         else:
-            # Older build without markers: inject OG meta right after <head>.
-            # For social crawlers the FIRST occurrence wins, so prepending is correct.
-            inject = og_block.replace("<!-- DYNAMIC_OG_START -->", "").replace("<!-- DYNAMIC_OG_END -->", "").strip()
+            # Older build: inject right after <head> — now guaranteed no duplicate tags
             html = html.replace("<head>", f"<head>\n{inject}", 1)
 
         logger.debug(f"OG inject: path={path} title={title!r}")
