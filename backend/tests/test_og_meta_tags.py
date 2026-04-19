@@ -43,12 +43,12 @@ class TestOGMetaTags:
         print(f"✓ og:description present: {og_description[:60]}...")
     
     def test_og_image_present_with_correct_url(self):
-        """og:image meta tag should point to https://www.asrenterprises.in/og-homepage.jpg"""
+        """og:image meta tag should point to https://www.asrenterprises.in/og-home.jpg"""
         pattern = r'<meta\s+property="og:image"\s+content="([^"]+)"'
         match = re.search(pattern, self.html)
         assert match, "og:image meta tag not found"
         og_image = match.group(1)
-        assert og_image == "https://www.asrenterprises.in/og-homepage.jpg", f"og:image should be 'https://www.asrenterprises.in/og-homepage.jpg', got: {og_image}"
+        assert og_image == "https://www.asrenterprises.in/og-home.jpg", f"og:image should be 'https://www.asrenterprises.in/og-home.jpg', got: {og_image}"
         print(f"✓ og:image present: {og_image}")
     
     def test_twitter_card_present(self):
@@ -66,7 +66,7 @@ class TestOGMetaTags:
         match = re.search(pattern, self.html)
         assert match, "twitter:image meta tag not found"
         twitter_image = match.group(1)
-        assert "og-homepage.jpg" in twitter_image or "asrenterprises" in twitter_image, f"twitter:image should reference the OG image, got: {twitter_image}"
+        assert "og-home.jpg" in twitter_image or "asrenterprises" in twitter_image, f"twitter:image should reference the OG image, got: {twitter_image}"
         print(f"✓ twitter:image present: {twitter_image}")
     
     def test_canonical_url_present(self):
@@ -102,8 +102,8 @@ class TestOGImageAccessibility:
     
     def test_og_image_accessible_at_preview_url(self):
         """OG image should be accessible at the preview URL"""
-        response = requests.get(f"{BASE_URL}/og-homepage.jpg")
-        assert response.status_code == 200, f"OG image not accessible at {BASE_URL}/og-homepage.jpg, got status {response.status_code}"
+        response = requests.get(f"{BASE_URL}/og-home.jpg")
+        assert response.status_code == 200, f"OG image not accessible at {BASE_URL}/og-home.jpg, got status {response.status_code}"
         
         # Check content type
         content_type = response.headers.get('Content-Type', '')
@@ -113,11 +113,11 @@ class TestOGImageAccessibility:
         content_length = len(response.content)
         assert content_length > 10000, f"OG image seems too small ({content_length} bytes), might be broken"
         
-        print(f"✓ OG image accessible at {BASE_URL}/og-homepage.jpg ({content_length} bytes)")
+        print(f"✓ OG image accessible at {BASE_URL}/og-home.jpg ({content_length} bytes)")
     
     def test_og_image_is_valid_image(self):
         """OG image should be a valid image (JPEG or PNG)"""
-        response = requests.get(f"{BASE_URL}/og-homepage.jpg")
+        response = requests.get(f"{BASE_URL}/og-home.jpg")
         assert response.status_code == 200
         
         # Check for valid image magic bytes (JPEG or PNG)

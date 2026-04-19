@@ -2763,6 +2763,7 @@ export default function App() {
           <Route path="/shop" element={<ShopPage />} />
           <Route path="/chat" element={<WhatsAppChatPage />} />
           <Route path="/become-agent" element={<AgentRegistrationPage />} />
+          <Route path="/advisor" element={<AgentRegistrationPage />} />
           
           {/* Hyper-Local SEO Pages */}
           <Route path="/solar" element={<SolarServicesPage />} />

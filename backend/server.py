@@ -12900,7 +12900,7 @@ if _STATIC_ASSET_DIR.exists():
 
 # ==================== DYNAMIC OG META INJECTION ====================
 _OG_BASE_URL = "https://www.asrenterprises.in"
-_OG_DEFAULT_IMAGE   = f"{_OG_BASE_URL}/og-homepage.jpg"
+_OG_DEFAULT_IMAGE   = f"{_OG_BASE_URL}/og-home.jpg"
 _OG_ADVISOR_IMAGE   = f"{_OG_BASE_URL}/og-advisor.jpg"
 _OG_GALLERY_IMAGE   = f"{_OG_BASE_URL}/og-gallery.jpg"
 _OG_CONTACT_IMAGE   = f"{_OG_BASE_URL}/og-contact.jpg"
