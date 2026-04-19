@@ -12900,7 +12900,11 @@ if _STATIC_ASSET_DIR.exists():
 
 # ==================== DYNAMIC OG META INJECTION ====================
 _OG_BASE_URL = "https://www.asrenterprises.in"
-_OG_DEFAULT_IMAGE = f"{_OG_BASE_URL}/og-homepage.jpg?v=2"
+_OG_DEFAULT_IMAGE   = f"{_OG_BASE_URL}/og-homepage.jpg"
+_OG_ADVISOR_IMAGE   = f"{_OG_BASE_URL}/og-advisor.jpg"
+_OG_GALLERY_IMAGE   = f"{_OG_BASE_URL}/og-gallery.jpg"
+_OG_CONTACT_IMAGE   = f"{_OG_BASE_URL}/og-contact.jpg"
+_OG_SHOP_IMAGE      = f"{_OG_BASE_URL}/og-shop.jpg"
 _OG_PRODUCT_CACHE: dict = {}  # simple TTL-less in-memory cache for product OG data
 
 def _esc(s: str) -> str:
@@ -12962,7 +12966,7 @@ async def _resolve_og(path: str):
         return (
             "Become Solar Advisor - ASR Enterprises",
             "Join ASR Enterprises & earn with solar business. High commission, flexible work. Serving Bihar.",
-            _OG_DEFAULT_IMAGE,
+            _OG_ADVISOR_IMAGE,
             _OG_BASE_URL + "/advisor",
         )
 
@@ -12971,7 +12975,7 @@ async def _resolve_og(path: str):
         return (
             "Our Solar Installation Work - ASR Enterprises",
             "See our latest solar installation projects across Bihar. 25+ happy customers, 100kW+ total capacity.",
-            _OG_DEFAULT_IMAGE,
+            _OG_GALLERY_IMAGE,
             _OG_BASE_URL + "/gallery",
         )
 
@@ -12980,7 +12984,7 @@ async def _resolve_og(path: str):
         return (
             "Contact ASR Enterprises - Solar Company Patna Bihar",
             "Contact ASR Enterprises for solar installation, subsidy assistance and free site survey. Call 9296389097.",
-            _OG_DEFAULT_IMAGE,
+            _OG_CONTACT_IMAGE,
             _OG_BASE_URL + "/contact",
         )
 
@@ -12989,7 +12993,7 @@ async def _resolve_og(path: str):
         return (
             "Solar Shop - ASR Enterprises",
             "Buy solar panels, inverters, batteries and accessories online. Quality products, doorstep delivery in Bihar.",
-            _OG_DEFAULT_IMAGE,
+            _OG_SHOP_IMAGE,
             _OG_BASE_URL + "/shop",
         )
 
