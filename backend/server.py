@@ -11561,6 +11561,24 @@ async def register_agent(agent: AgentRegistration):
         await db.agents.insert_one(agent_doc)
         logger.info(f"New Solar Advisor registered: {agent_id} - {agent.name}")
 
+        # Notify admin via WhatsApp link (non-blocking)
+        try:
+            admin_msg = (
+                f"🌟 *NEW SOLAR ADVISOR REGISTRATION*\n\n"
+                f"ID: {agent_id}\n"
+                f"Name: {agent.name}\n"
+                f"Mobile: {phone_clean}\n"
+                f"Email: {(agent.email or '').strip()}\n"
+                f"District: {agent.district or ''}\n"
+                f"Experience: {agent.experience or 'Not specified'}\n\n"
+                f"⚠️ Status: *PENDING APPROVAL*\n"
+                f"Please review and approve at:\nasrenterprises.in/admin/solar-advisors"
+            )
+            admin_wa_url = get_whatsapp_url(OWNER_MOBILE, admin_msg)
+            logger.info(f"Admin WhatsApp notification URL ready for new advisor {agent_id}: {admin_wa_url[:60]}...")
+        except Exception as notify_err:
+            logger.warning(f"Could not build admin notification for {agent_id}: {notify_err}")
+
         return {
             "success": True,
             "agent_id": agent_id,

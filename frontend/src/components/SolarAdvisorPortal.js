@@ -384,8 +384,8 @@ const CustomerList = ({ customers }) => {
         <thead className="bg-slate-100 text-gray-700">
           <tr>
             <th className="text-left p-2">Customer</th>
-            <th className="text-left p-2">Mobile</th>
-            <th className="text-left p-2 hidden md:table-cell">Address</th>
+            <th className="text-left p-2">Call</th>
+            <th className="text-left p-2 hidden md:table-cell">Provider / CA</th>
             <th className="text-left p-2 hidden lg:table-cell">Capacity</th>
             <th className="text-left p-2 hidden md:table-cell">Type</th>
             <th className="text-left p-2">Status</th>
@@ -400,8 +400,16 @@ const CustomerList = ({ customers }) => {
                 <div className="font-semibold text-gray-800">{c.name}</div>
                 <div className="text-xs text-gray-500">{c.email || "—"}</div>
               </td>
-              <td className="p-2"><a href={`tel:${c.phone}`} className="text-blue-600 hover:underline">{c.phone}</a></td>
-              <td className="p-2 hidden md:table-cell text-gray-600">{[c.address, c.district, c.pincode].filter(Boolean).join(", ") || "—"}</td>
+              <td className="p-2">
+                <a href={`tel:${c.phone}`}
+                  className="inline-flex items-center gap-1.5 bg-green-500 hover:bg-green-600 text-white text-xs font-semibold px-3 py-1.5 rounded-full transition">
+                  <Phone className="w-3 h-3" /> {c.phone}
+                </a>
+              </td>
+              <td className="p-2 hidden md:table-cell text-xs">
+                {c.electricity_provider ? <span className="font-semibold text-blue-700">{c.electricity_provider}</span> : <span className="text-gray-400">—</span>}
+                {c.ca_no ? <div className="text-gray-500 font-mono">CA: {c.ca_no}</div> : null}
+              </td>
               <td className="p-2 hidden lg:table-cell">{c.required_capacity_kw ? `${c.required_capacity_kw} kW` : "—"}</td>
               <td className="p-2 hidden md:table-cell capitalize">{c.customer_type || c.property_type || "—"}</td>
               <td className="p-2">
@@ -514,6 +522,7 @@ const OnboardCustomerModal = ({ agentId, onClose, onSuccess }) => {
   const [f, setF] = useState({
     customer_name: "", customer_mobile: "", customer_email: "",
     address: "", district: "", pincode: "",
+    ca_no: "", electricity_provider: "",
     required_capacity_kw: "", customer_type: "residential",
     monthly_bill: "", notes: "",
   });
@@ -545,6 +554,16 @@ const OnboardCustomerModal = ({ agentId, onClose, onSuccess }) => {
           <Input label="Email" v={f.customer_email} on={(v) => setF({ ...f, customer_email: v })} type="email" />
           <Input label="District *" v={f.district} on={(v) => setF({ ...f, district: v })} required />
           <Input label="Pincode" v={f.pincode} on={(v) => setF({ ...f, pincode: v })} />
+          <Input label="CA No. (Electricity Bill)" v={f.ca_no} on={(v) => setF({ ...f, ca_no: v })} placeholder="Consumer Account Number" />
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-1">Electricity Provider *</label>
+            <select value={f.electricity_provider} onChange={(e) => setF({ ...f, electricity_provider: e.target.value })}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg" required>
+              <option value="">Select Provider</option>
+              <option value="SBPDCL">SBPDCL (South Bihar)</option>
+              <option value="NBPDCL">NBPDCL (North Bihar)</option>
+            </select>
+          </div>
           <div>
             <label className="block text-xs font-semibold text-gray-700 mb-1">Customer Type *</label>
             <select value={f.customer_type} onChange={(e) => setF({ ...f, customer_type: e.target.value })}
@@ -820,8 +839,8 @@ const AdvisorLeadsTable = ({ leads, reload }) => {
         <thead className="bg-slate-100">
           <tr>
             <th className="text-left p-3">Customer</th>
-            <th className="text-left p-3">Mobile</th>
-            <th className="text-left p-3 hidden md:table-cell">Email</th>
+            <th className="text-left p-3">Call</th>
+            <th className="text-left p-3 hidden md:table-cell">Provider / CA</th>
             <th className="text-left p-3 hidden lg:table-cell">Address</th>
             <th className="text-left p-3">Capacity</th>
             <th className="text-left p-3">Type</th>
@@ -833,9 +852,18 @@ const AdvisorLeadsTable = ({ leads, reload }) => {
           {leads.map(l => (
             <tr key={l.id} className="border-t border-gray-100 hover:bg-slate-50">
               <td className="p-3 font-semibold">{l.name}</td>
-              <td className="p-3"><a href={`tel:${l.phone}`} className="text-blue-600 hover:underline">{l.phone}</a></td>
-              <td className="p-3 hidden md:table-cell text-xs">{l.email || "—"}</td>
-              <td className="p-3 hidden lg:table-cell text-xs">{[l.address, l.district, l.pincode].filter(Boolean).join(", ")}</td>
+              <td className="p-3">
+                <a href={`tel:${l.phone}`}
+                  className="inline-flex items-center gap-1.5 bg-green-500 hover:bg-green-600 text-white text-xs font-semibold px-2.5 py-1.5 rounded-full transition">
+                  <Phone className="w-3 h-3" /> {l.phone}
+                </a>
+                {l.email && <div className="text-xs text-gray-400 mt-0.5">{l.email}</div>}
+              </td>
+              <td className="p-3 hidden md:table-cell text-xs">
+                {l.electricity_provider ? <span className="font-semibold text-blue-700">{l.electricity_provider}</span> : <span className="text-gray-400">—</span>}
+                {l.ca_no ? <div className="text-gray-500 font-mono">CA: {l.ca_no}</div> : null}
+              </td>
+              <td className="p-3 hidden lg:table-cell text-xs">{[l.address, l.district, l.pincode].filter(Boolean).join(", ") || "—"}</td>
               <td className="p-3">{l.required_capacity_kw ? `${l.required_capacity_kw} kW` : "—"}</td>
               <td className="p-3 capitalize">{l.customer_type || l.property_type}</td>
               <td className="p-3 text-xs">
