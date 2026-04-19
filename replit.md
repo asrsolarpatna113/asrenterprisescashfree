@@ -24,6 +24,30 @@ ASR Enterprises is a full-stack web application with a Create React App frontend
 - Run command starts FastAPI on `0.0.0.0:${PORT:-5000}` and serves the compiled React app from `frontend/build`.
 - Frontend production dependencies were aligned for normal npm install: React 18, React DOM 18, date-fns 3, ESLint 8, AJV 8.
 - The public website theme uses a premium light solar palette with sunlit gold, solar-glass blue, emerald CTA accents, and visible solar-panel grid/array effects on the homepage hero and zero-bill section.
+## April 19, 2026 — Login UX, Solar Hub Rename, Payment WhatsApp, Shop Fixes (Session 7)
+
+### Login Pages — Back to Login
+- Added "← Back to Login" button to all 4 login pages (Admin, Staff, Customer, Solar Advisor) pointing to `/login` (the LoginSelector).
+
+### ASR Solar Hub Rename
+- "ASR Solar Shop" renamed to "ASR Solar Hub" in Shop.js (navbar) and throughout server.py (notifications, CRM messages, order confirmations).
+
+### WhatsApp Order Confirmation — Payment Verified First
+- **Bug**: `create_order` was sending WhatsApp confirmation to customer immediately on order creation, before Cashfree payment was verified.
+- **Fix**: WhatsApp is now sent **only for COD orders** at creation. For online payment orders, WhatsApp is triggered inside `verify_cashfree_shop_payment` only after Cashfree API confirms `order_status == "PAID"`.
+
+### Service Booking Amount Fix
+- **Bug**: `renderBookingsTable` in CRMDashboard.js displayed `b.amount` but solar_service_bookings documents use `price` field. All bookings showed ₹0.
+- **Fix**: Changed to `b.price || b.amount || 0` with `toLocaleString('en-IN')` formatting.
+
+### Shop Management — Settings Tab
+- Removed `BookServiceConfig` and `DistrictFeesConfig` from always-visible area; moved into a new dedicated **Settings** tab.
+- Settings tab contains: Book Service Price config + Delivery Fees by District editor.
+
+### Shop Management — Add Product UX
+- Added green success banner ("Product created successfully!") that auto-dismisses after 4 seconds on product create/update.
+- Submit now uses `editingProduct` correctly to show "Product updated" vs "Product created".
+
 ## April 18, 2026 — Payment Routing Fix + Shop Management Overhaul (Session 6)
 
 ### Payment Order Routing Fix

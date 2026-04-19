@@ -7703,7 +7703,7 @@ def generate_order_whatsapp_message(order: Order) -> str:
     """Generate WhatsApp notification message for admin (new order alert)"""
     items_text = "\n".join([f"• {item.get('product_name', 'Item')} x{item.get('quantity', 1)} - ₹{item.get('price', 0) * item.get('quantity', 1):,.0f}" for item in order.items])
     
-    message = f"""🛒 *NEW ORDER - ASR Solar Shop*
+    message = f"""🛒 *NEW ORDER - ASR Solar Hub*
 
 📦 Order #: {order.order_number}
 
@@ -7905,7 +7905,7 @@ async def create_order(order_data: Dict[str, Any]):
     try:
         crm_message = CRMMessage(
             sender_id="system",
-            sender_name="ASR Solar Shop",
+            sender_name="ASR Solar Hub",
             sender_type="system",
             receiver_id="admin",
             receiver_name="Admin",
@@ -7917,20 +7917,22 @@ async def create_order(order_data: Dict[str, Any]):
     except Exception as e:
         logger.error(f"Failed to create CRM notification for order: {e}")
     
-    # Auto-send WhatsApp order confirmation
+    # Auto-send WhatsApp order confirmation ONLY for COD orders.
+    # For online payment orders, WhatsApp is sent after Cashfree payment is verified.
     whatsapp_sent = False
-    try:
-        order_data_for_whatsapp = {
-            "order_number": order.order_number,
-            "customer_name": order.customer_name,
-            "items": order.items,
-            "total": order.total,
-            "delivery_type": order.delivery_type,
-            "delivery_address": order.delivery_address
-        }
-        whatsapp_sent = await send_whatsapp_order_confirmation(order.customer_phone, order_data_for_whatsapp)
-    except Exception as e:
-        logger.error(f"Failed to send WhatsApp order confirmation: {e}")
+    if order.payment_method == "cod":
+        try:
+            order_data_for_whatsapp = {
+                "order_number": order.order_number,
+                "customer_name": order.customer_name,
+                "items": order.items,
+                "total": order.total,
+                "delivery_type": order.delivery_type,
+                "delivery_address": order.delivery_address
+            }
+            whatsapp_sent = await send_whatsapp_order_confirmation(order.customer_phone, order_data_for_whatsapp)
+        except Exception as e:
+            logger.error(f"Failed to send WhatsApp order confirmation: {e}")
     
     return {
         "status": "success", 
@@ -8010,9 +8012,21 @@ async def verify_cashfree_shop_payment(data: Dict[str, Any]):
         invalidate_cache("orders")
         order = await db.orders.find_one({"cashfree_order_id": cf_order_id}, {"_id": 0})
         phone = order.get("customer_phone", "")
-        wa_msg = f"Your ASR Solar Shop order {order.get('order_number', '')} has been confirmed! Payment received. Track at asrenterprises.in"
+        wa_msg = f"Your ASR Solar Hub order {order.get('order_number', '')} has been confirmed! Payment received. Track at asrenterprises.in"
         customer_whatsapp_url = f"https://wa.me/91{phone[-10:]}?text={wa_msg}" if phone else None
         logger.info(f"[Cashfree] Shop order {cf_order_id} payment verified and updated to PAID")
+        # Send WhatsApp confirmation now that payment is verified
+        try:
+            await send_whatsapp_order_confirmation(phone, {
+                "order_number": order.get("order_number", ""),
+                "customer_name": order.get("customer_name", "Customer"),
+                "items": order.get("items", []),
+                "total": order.get("total", 0),
+                "delivery_type": order.get("delivery_type", "pickup"),
+                "delivery_address": order.get("delivery_address", "")
+            })
+        except Exception as wa_err:
+            logger.error(f"[Cashfree] WhatsApp post-payment send failed for {cf_order_id}: {wa_err}")
         return {"success": True, "order": {**order, "payment_completed": True, "customer_whatsapp_url": customer_whatsapp_url}}
     else:
         # Return order info without payment confirmation
@@ -8235,7 +8249,7 @@ async def verify_razorpay_payment(order_id: str, data: Dict[str, Any]):
     
     # Generate WhatsApp payment confirmation notification for admin
     admin_phone = "9296389097"
-    payment_message = f"""✅ *PAYMENT CONFIRMED - ASR Solar Shop*
+    payment_message = f"""✅ *PAYMENT CONFIRMED - ASR Solar Hub*
 
 📦 Order #: {order.get('order_number', 'N/A')}
 👤 Customer: {order.get('customer_name', 'N/A')}
@@ -11943,9 +11957,9 @@ async def optimize_website():
 
 @api_router.delete("/admin/cleanup-non-asr-orders")
 async def cleanup_non_asr_orders():
-    """Permanently delete all non-ASR Solar Shop orders from database"""
+    """Permanently delete all non-ASR Solar Hub orders from database"""
     
-    # Find orders that are NOT from ASR Solar Shop
+    # Find orders that are NOT from ASR Solar Hub
     # These include:
     # 1. Orders with source = "razorpay_sync" (old sync without ASR filter)
     # 2. Orders with order_number starting with "RZP-" (old Razorpay sync prefix)

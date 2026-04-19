@@ -450,6 +450,11 @@ export const AdminLogin = ({ onLogin }) => {
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#F7FAFC] via-white to-[#E0F2FE] flex items-center justify-center px-4" style={{ fontFamily: "'Inter', sans-serif" }}>
       <div className="max-w-md w-full">
+        {/* Back to Login */}
+        <a href="/login" className="inline-flex items-center gap-1.5 text-slate-400 hover:text-[#073B4C] text-sm mb-6 transition">
+          <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+          Back to Login
+        </a>
         {/* Logo */}
         <div className="text-center mb-8">
           <div className="rounded-2xl p-4 mx-auto mb-4 inline-block">

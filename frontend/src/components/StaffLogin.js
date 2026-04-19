@@ -652,9 +652,9 @@ export const StaffLogin = () => {
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#F7FAFC] via-white to-[#E0F2FE] flex items-center justify-center p-4" style={{ fontFamily: "'Inter', sans-serif" }}>
       <div className="max-w-md w-full">
-        <Link to="/" className="flex items-center text-gray-600 hover:text-[#0B3C5D] mb-6 transition">
+        <Link to="/login" className="flex items-center text-gray-600 hover:text-[#0B3C5D] mb-6 transition">
           <ArrowLeft className="w-4 h-4 mr-2" />
-          Back to Home
+          Back to Login
         </Link>
 
         <div className="bg-white/90 backdrop-blur-xl rounded-3xl shadow-2xl p-8 border border-[#0B3C5D]/10">

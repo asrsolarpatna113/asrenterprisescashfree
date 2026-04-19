@@ -93,8 +93,8 @@ export const SolarAdvisorLogin = () => {
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-900 via-indigo-900 to-purple-800 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
-        <Link to="/" className="text-purple-200 hover:text-white mb-4 inline-flex items-center">
-          <ChevronRight className="w-4 h-4 rotate-180" /> Back to Home
+        <Link to="/login" className="text-purple-200 hover:text-white mb-4 inline-flex items-center">
+          <ChevronRight className="w-4 h-4 rotate-180" /> Back to Login
         </Link>
         <div className="bg-white rounded-2xl shadow-2xl p-8">
           <div className="text-center mb-6">

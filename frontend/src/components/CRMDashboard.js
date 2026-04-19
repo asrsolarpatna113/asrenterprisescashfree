@@ -744,7 +744,7 @@ const ServicePriceConfig = memo(() => {
                   <div className="font-medium">{b.customer_name}</div>
                   <div className="text-xs text-gray-500">{b.customer_phone}</div>
                 </td>
-                <td className="px-4 py-3 font-bold text-green-600">₹{b.amount}</td>
+                <td className="px-4 py-3 font-bold text-green-600">₹{(b.price || b.amount || 0).toLocaleString('en-IN')}</td>
                 <td className="px-4 py-3">
                   <span className="px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700">
                     {b.payment_status || "paid"}
@@ -954,7 +954,7 @@ const BookingsManager = memo(() => {
                       <div className="font-medium">{b.customer_name}</div>
                       <div className="text-xs text-gray-500">{b.customer_phone}</div>
                     </td>
-                    <td className="px-4 py-3 font-bold text-green-600">₹{b.amount}</td>
+                    <td className="px-4 py-3 font-bold text-green-600">₹{(b.price || b.amount || 0).toLocaleString('en-IN')}</td>
                     <td className="px-4 py-3">
                       <div className="text-xs font-mono bg-gray-100 px-2 py-1 rounded">{b.transaction_id || '-'}</div>
                     </td>

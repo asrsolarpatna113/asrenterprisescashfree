@@ -175,6 +175,7 @@ export const ProductManagement = () => {
   const [activeTab, setActiveTab] = useState("products");
   const [showForm, setShowForm] = useState(false);
   const [editingProduct, setEditingProduct] = useState(null);
+  const [successMessage, setSuccessMessage] = useState("");
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -430,6 +431,8 @@ export const ProductManagement = () => {
       resetForm();
       fetchProducts();
       fetchShopStats();
+      setSuccessMessage(editingProduct ? "Product updated successfully!" : "Product created successfully!");
+      setTimeout(() => setSuccessMessage(""), 4000);
     } catch (err) {
       console.error("Error saving product:", err);
       const msg = err?.response?.data?.detail || err?.message || "Unknown error";
@@ -654,17 +657,19 @@ export const ProductManagement = () => {
           </div>
         </div>
 
-        {/* Book Service Price Config */}
-        <BookServiceConfig />
-        
-        {/* District Delivery Fees Config */}
-        <DistrictFeesConfig />
+        {/* Success Banner */}
+        {successMessage && (
+          <div className="mb-4 px-4 py-3 bg-green-50 border border-green-300 text-green-700 rounded-xl flex items-center gap-2 font-medium">
+            <CheckCircle className="w-5 h-5 text-green-500 flex-shrink-0" />
+            {successMessage}
+          </div>
+        )}
 
         {/* Tabs */}
-        <div className="flex space-x-2 border-b border-sky-200 pb-2 mb-6">
+        <div className="flex space-x-2 border-b border-sky-200 pb-2 mb-6 overflow-x-auto">
           <button
             onClick={() => setActiveTab("products")}
-            className={`px-4 py-2 rounded-t-lg font-medium transition ${
+            className={`px-4 py-2 rounded-t-lg font-medium transition whitespace-nowrap ${
               activeTab === "products" ? "bg-amber-500 text-[#0a355e]" : "text-gray-500 hover:text-[#0a355e]"
             }`}
           >
@@ -673,12 +678,21 @@ export const ProductManagement = () => {
           </button>
           <button
             onClick={() => setActiveTab("orders")}
-            className={`px-4 py-2 rounded-t-lg font-medium transition ${
+            className={`px-4 py-2 rounded-t-lg font-medium transition whitespace-nowrap ${
               activeTab === "orders" ? "bg-amber-500 text-[#0a355e]" : "text-gray-500 hover:text-[#0a355e]"
             }`}
           >
             <ShoppingBag className="w-4 h-4 inline mr-2" />
             Orders
+          </button>
+          <button
+            onClick={() => setActiveTab("settings")}
+            className={`px-4 py-2 rounded-t-lg font-medium transition whitespace-nowrap ${
+              activeTab === "settings" ? "bg-amber-500 text-[#0a355e]" : "text-gray-500 hover:text-[#0a355e]"
+            }`}
+          >
+            <Settings className="w-4 h-4 inline mr-2" />
+            Settings
           </button>
         </div>
 
@@ -941,6 +955,32 @@ export const ProductManagement = () => {
                 No orders yet. Click "Sync Payments" to import from Razorpay.
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Settings Tab */}
+      {activeTab === "settings" && (
+        <div className="space-y-6">
+          <h2 className="text-lg font-bold text-[#0a355e] flex items-center gap-2">
+            <Settings className="w-5 h-5 text-amber-500" /> Shop Settings
+          </h2>
+
+          {/* Book Service Price */}
+          <BookServiceConfig />
+
+          {/* Delivery Fees by District */}
+          <div className="bg-white shadow-lg border border-sky-200 rounded-xl overflow-hidden">
+            <div className="px-5 py-4 border-b border-sky-100 bg-gradient-to-r from-sky-50 to-blue-50 flex items-center gap-2">
+              <MapPin className="w-5 h-5 text-blue-500" />
+              <div>
+                <h3 className="font-bold text-[#0a355e] text-sm">Delivery Fees by District</h3>
+                <p className="text-gray-500 text-xs">Set district-wise delivery charges across Bihar. Per-product overrides can be set in the product form.</p>
+              </div>
+            </div>
+            <div className="p-5">
+              <DistrictFeesConfig />
+            </div>
           </div>
         </div>
       )}

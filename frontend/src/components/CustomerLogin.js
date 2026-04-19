@@ -109,6 +109,10 @@ export const CustomerLogin = () => {
       <div className="flex-1 flex items-center justify-center px-4 py-12 relative">
         <div className="w-full max-w-md">
           <div className="text-center mb-8">
+            <a href="/login" className="inline-flex items-center gap-1.5 text-slate-400 hover:text-[#073B4C] text-sm mb-4 transition">
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+              Back to Login
+            </a>
             <Link to="/" className="inline-flex items-center gap-3 mb-6">
               <img src="/asr_logo_transparent.png" alt="ASR Enterprises" className="h-14 w-auto" />
               <div className="text-left">
