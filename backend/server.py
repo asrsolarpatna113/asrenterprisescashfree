@@ -145,7 +145,7 @@ MAX_FAILED_LOGINS = 5      # Max failed logins before lockout
 # This account cannot be deleted, modified, or bypassed.
 # ============================================================
 OWNER_EMAIL    = "asrenterprisespatna@gmail.com"
-OWNER_MOBILE   = "8877896889"
+OWNER_MOBILE   = "9296389097"
 OWNER_STAFF_ID = "ASR1001"
 OWNER_NAME     = "ABHIJEET KUMAR"
 OWNER_PASSWORD = "Abhi@9745"   # fallback if DB has no hash
@@ -3854,7 +3854,7 @@ async def admin_login_password(request: Request, data: Dict[str, Any]):
 async def admin_login_otp(request: Request, data: Dict[str, Any]):
     """Login with mobile OTP for admin and staff (MSG91 verified)
     
-    Admin: Only 8877896889 is allowed
+    Admin: Only 9296389097 is allowed
     Staff: Only registered staff mobile numbers are allowed
     """
     client_ip = get_real_ip(request)

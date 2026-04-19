@@ -216,6 +216,8 @@ export const ProductManagement = () => {
   const [biharDistricts, setBiharDistricts] = useState({ districts: [], delivery_fees: {} });
   const [syncingPayments, setSyncingPayments] = useState(false);
   const [syncResult, setSyncResult] = useState(null);
+  const [formError, setFormError] = useState("");
+  const [discountPercent, setDiscountPercent] = useState("");
   const fileInputRef = useRef(null);
 
   // Wire price reference (per meter) - just for suggestions
@@ -408,11 +410,13 @@ export const ProductManagement = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!formData.name?.trim()) { alert("Product name is required."); return; }
+    setFormError("");
+    if (!formData.name?.trim()) { setFormError("Product name is required."); return; }
     const price = parseFloat(formData.price);
-    if (!price || price <= 0) { alert("Please enter a valid price."); return; }
+    if (!price || price <= 0) { setFormError("Please enter a valid MRP / price."); return; }
 
     try {
+      const isEditing = !!editingProduct;
       const data = {
         ...formData,
         price,
@@ -420,7 +424,7 @@ export const ProductManagement = () => {
         stock: parseInt(formData.stock) || 0
       };
 
-      if (editingProduct) {
+      if (isEditing) {
         await axios.put(`${API}/shop/products/${editingProduct.id}`, data);
       } else {
         await axios.post(`${API}/shop/products`, data);
@@ -431,12 +435,20 @@ export const ProductManagement = () => {
       resetForm();
       fetchProducts();
       fetchShopStats();
-      setSuccessMessage(editingProduct ? "Product updated successfully!" : "Product created successfully!");
+      setSuccessMessage(isEditing ? "Product updated successfully!" : "Product created successfully!");
       setTimeout(() => setSuccessMessage(""), 4000);
     } catch (err) {
       console.error("Error saving product:", err);
-      const msg = err?.response?.data?.detail || err?.message || "Unknown error";
-      alert(`Failed to save product: ${msg}`);
+      const detail = err?.response?.data?.detail;
+      let errorMsg;
+      if (Array.isArray(detail)) {
+        errorMsg = detail.map(e => e.msg || JSON.stringify(e)).join("; ");
+      } else if (typeof detail === "string") {
+        errorMsg = detail;
+      } else {
+        errorMsg = err?.message || "Unknown error. Please try again.";
+      }
+      setFormError(errorMsg);
     }
   };
 
@@ -532,6 +544,8 @@ export const ProductManagement = () => {
       shipping_info: "",
       product_highlights: []
     });
+    setDiscountPercent("");
+    setFormError("");
   };
 
   const updateOrderStatus = async (orderId, status) => {
@@ -1124,50 +1138,26 @@ export const ProductManagement = () => {
                         <Wrench className="w-5 h-5 mr-2" />
                         Service Configuration
                       </h3>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
-                          <label className="text-gray-500 text-sm mb-2 block">Service Type</label>
-                          <select
-                            value={formData.service_type}
-                            onChange={(e) => {
-                              const serviceType = e.target.value;
-                              let serviceName = "Solar Cleaning Service";
-                              
-                              if (serviceType === "maintenance") {
-                                serviceName = "Solar Maintenance Service";
-                              } else if (serviceType === "repair") {
-                                serviceName = "Solar Repair Service";
-                              } else if (serviceType === "consultation") {
-                                serviceName = "Solar Consultation Service";
-                              }
-                              
-                              setFormData({
-                                ...formData, 
-                                service_type: serviceType,
-                                name: serviceName,
-                                description: "" // Clear description so user can generate new one
-                              });
-                            }}
-                            className="w-full px-4 py-3 bg-white shadow-lg border border-sky-200/50 border border-sky-200 rounded-lg text-[#0a355e]"
-                          >
-                            <option value="cleaning">Cleaning Service</option>
-                            <option value="maintenance">Maintenance Service</option>
-                            <option value="repair">Repair Service</option>
-                            <option value="consultation">Consultation Service</option>
-                          </select>
-                        </div>
-                        <div>
-                          <label className="text-gray-500 text-sm mb-2 block">Service Price (₹) *</label>
-                          <input
-                            type="number"
-                            required
-                            value={formData.price}
-                            onChange={(e) => setFormData({...formData, price: e.target.value})}
-                            className="w-full px-4 py-3 bg-white shadow-lg border border-sky-200/50 border border-sky-200 rounded-lg text-[#0a355e]"
-                            placeholder="1500"
-                          />
-                          <p className="text-gray-500 text-xs mt-1">Suggested base price: ₹1,500</p>
-                        </div>
+                      <div>
+                        <label className="text-gray-500 text-sm mb-2 block">Service Type</label>
+                        <select
+                          value={formData.service_type}
+                          onChange={(e) => {
+                            const serviceType = e.target.value;
+                            let serviceName = "Solar Cleaning Service";
+                            if (serviceType === "maintenance") serviceName = "Solar Maintenance Service";
+                            else if (serviceType === "repair") serviceName = "Solar Repair Service";
+                            else if (serviceType === "consultation") serviceName = "Solar Consultation Service";
+                            setFormData({ ...formData, service_type: serviceType, name: serviceName, description: "" });
+                          }}
+                          className="w-full px-4 py-3 bg-white shadow-lg border border-sky-200/50 border border-sky-200 rounded-lg text-[#0a355e]"
+                        >
+                          <option value="cleaning">Cleaning Service</option>
+                          <option value="maintenance">Maintenance Service</option>
+                          <option value="repair">Repair Service</option>
+                          <option value="consultation">Consultation Service</option>
+                        </select>
+                        <p className="text-gray-500 text-xs mt-1">Service price is set in the Pricing section below</p>
                       </div>
                       
                       {/* AI Description Generator for Service */}
@@ -1236,35 +1226,97 @@ export const ProductManagement = () => {
                     </div>
                   )}
 
-                  {/* Price - Hidden for Wire (auto-calculated), Editable for Service */}
+                  {/* MRP + Discount + Selling Price - Hidden for Wire (auto-calculated) */}
                   {formData.category !== "wire" && (
-                    <div>
-                      <label className="text-gray-500 text-sm mb-1 block">
-                        Price (₹) * 
-                        {formData.category === "service" && <span className="text-green-400 ml-1">(Base: ₹1,500)</span>}
-                      </label>
-                      <input
-                        type="number"
-                        required
-                        value={formData.price}
-                        onChange={(e) => setFormData({...formData, price: e.target.value})}
-                        className="w-full px-4 py-2 bg-white shadow-lg border border-sky-200/50 border border-sky-200 rounded-lg text-[#0a355e]"
-                        placeholder="25000"
-                      />
-                    </div>
-                  )}
+                    <div className="md:col-span-2">
+                      <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+                        <h3 className="text-[#0a355e] font-semibold text-sm mb-3 flex items-center gap-2">
+                          <DollarSign className="w-4 h-4 text-amber-500" /> Pricing
+                          {formData.category === "service" && <span className="text-green-600 text-xs font-normal ml-1">(Base suggested: ₹1,500)</span>}
+                        </h3>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          {/* MRP */}
+                          <div>
+                            <label className="text-gray-600 text-xs font-semibold mb-1 block">MRP (₹) *</label>
+                            <input
+                              type="number"
+                              required
+                              value={formData.price}
+                              onChange={(e) => {
+                                const mrp = parseFloat(e.target.value) || 0;
+                                const disc = parseFloat(discountPercent) || 0;
+                                const selling = disc > 0 ? Math.round(mrp * (1 - disc / 100)) : "";
+                                setFormData(prev => ({ ...prev, price: e.target.value, sale_price: selling ? String(selling) : prev.sale_price }));
+                              }}
+                              className="w-full px-3 py-2 bg-white border border-amber-300 rounded-lg text-[#0a355e] font-semibold text-sm focus:ring-2 focus:ring-amber-400 focus:outline-none"
+                              placeholder="e.g. 28000"
+                            />
+                            <p className="text-gray-500 text-xs mt-1">Original / maximum price</p>
+                          </div>
 
-                  {/* Sale Price - Hidden for Service, shown for Wire with per meter label */}
-                  {formData.category !== "service" && formData.category !== "wire" && (
-                    <div>
-                      <label className="text-gray-500 text-sm mb-1 block">Sale Price (₹)</label>
-                      <input
-                        type="number"
-                        value={formData.sale_price}
-                        onChange={(e) => setFormData({...formData, sale_price: e.target.value})}
-                        className="w-full px-4 py-2 bg-white shadow-lg border border-sky-200/50 border border-sky-200 rounded-lg text-[#0a355e]"
-                        placeholder="22000 (leave empty if no sale)"
-                      />
+                          {/* Discount % */}
+                          {formData.category !== "service" && (
+                            <div>
+                              <label className="text-gray-600 text-xs font-semibold mb-1 block">Discount (%)</label>
+                              <input
+                                type="number"
+                                min="0"
+                                max="99"
+                                value={discountPercent}
+                                onChange={(e) => {
+                                  const disc = parseFloat(e.target.value) || 0;
+                                  const mrp = parseFloat(formData.price) || 0;
+                                  const selling = mrp > 0 && disc > 0 ? Math.round(mrp * (1 - disc / 100)) : "";
+                                  setDiscountPercent(e.target.value);
+                                  if (selling) setFormData(prev => ({ ...prev, sale_price: String(selling) }));
+                                }}
+                                className="w-full px-3 py-2 bg-white border border-amber-300 rounded-lg text-[#0a355e] text-sm focus:ring-2 focus:ring-amber-400 focus:outline-none"
+                                placeholder="e.g. 10"
+                              />
+                              <p className="text-gray-500 text-xs mt-1">Auto-calculates selling price</p>
+                            </div>
+                          )}
+
+                          {/* Selling Price */}
+                          {formData.category !== "service" && (
+                            <div>
+                              <label className="text-gray-600 text-xs font-semibold mb-1 block">Selling Price (₹)</label>
+                              <input
+                                type="number"
+                                value={formData.sale_price}
+                                onChange={(e) => {
+                                  const mrp = parseFloat(formData.price) || 0;
+                                  const selling = parseFloat(e.target.value) || 0;
+                                  const disc = mrp > 0 && selling > 0 ? Math.round((1 - selling / mrp) * 100) : 0;
+                                  setFormData(prev => ({ ...prev, sale_price: e.target.value }));
+                                  if (disc > 0) setDiscountPercent(String(disc));
+                                }}
+                                className="w-full px-3 py-2 bg-white border border-green-300 rounded-lg text-green-700 font-semibold text-sm focus:ring-2 focus:ring-green-400 focus:outline-none"
+                                placeholder="Leave empty if no offer"
+                              />
+                              <p className="text-gray-500 text-xs mt-1">Price shown to customer</p>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Live preview */}
+                        {formData.price && (
+                          <div className="mt-3 pt-3 border-t border-amber-200 flex items-center gap-3 text-sm">
+                            <span className="text-gray-500">Preview:</span>
+                            {formData.sale_price && parseFloat(formData.sale_price) < parseFloat(formData.price) ? (
+                              <>
+                                <span className="text-green-700 font-bold text-base">₹{parseFloat(formData.sale_price).toLocaleString('en-IN')}</span>
+                                <span className="text-gray-400 line-through">₹{parseFloat(formData.price).toLocaleString('en-IN')}</span>
+                                <span className="bg-green-100 text-green-700 text-xs font-bold px-2 py-0.5 rounded-full">
+                                  {Math.round((1 - parseFloat(formData.sale_price) / parseFloat(formData.price)) * 100)}% OFF
+                                </span>
+                              </>
+                            ) : (
+                              <span className="text-[#0a355e] font-bold text-base">₹{parseFloat(formData.price || 0).toLocaleString('en-IN')}</span>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   )}
 
@@ -1543,17 +1595,23 @@ export const ProductManagement = () => {
                   )}
                 </div>
 
+                {formError && (
+                  <div className="flex items-start gap-2 bg-red-50 border border-red-300 text-red-700 rounded-xl px-4 py-3 text-sm">
+                    <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                    <span>{formError}</span>
+                  </div>
+                )}
                 <div className="flex justify-end space-x-3 pt-4 border-t border-sky-200">
                   <button
                     type="button"
-                    onClick={() => setShowForm(false)}
-                    className="px-6 py-2 bg-gray-50 border border-gray-300 text-[#0a355e] rounded-lg hover:bg-gray-600"
+                    onClick={() => { setShowForm(false); setFormError(""); }}
+                    className="px-6 py-2 bg-gray-50 border border-gray-300 text-[#0a355e] rounded-lg hover:bg-gray-200"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
-                    className="px-6 py-2 bg-amber-500 text-[#0a355e] rounded-lg hover:bg-amber-600 flex items-center space-x-2"
+                    className="px-6 py-2 bg-amber-500 text-[#0a355e] rounded-lg hover:bg-amber-600 flex items-center space-x-2 font-semibold"
                   >
                     <Save className="w-5 h-5" />
                     <span>{editingProduct ? "Update" : "Create"} Product</span>
