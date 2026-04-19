@@ -845,17 +845,79 @@ export const ShopManagement = () => {
                 <textarea value={productForm.description} onChange={e => setProductForm({...productForm, description: e.target.value})}
                   className="w-full mt-1 px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:outline-none" rows={2} placeholder="Product description..." />
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-sm font-medium text-gray-700">Price (₹) *</label>
-                  <input type="number" value={productForm.price} onChange={e => setProductForm({...productForm, price: e.target.value})}
-                    className="w-full mt-1 px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:outline-none" placeholder="1500" data-testid="product-price" />
+              {/* Pricing — MRP + Discount + Selling Price */}
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3">
+                <p className="text-xs font-semibold text-amber-800 uppercase tracking-wide">Pricing</p>
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="text-xs font-medium text-gray-700 mb-1 block">MRP (₹) *</label>
+                    <input
+                      type="number"
+                      value={productForm.price}
+                      onChange={e => {
+                        const mrp = parseFloat(e.target.value) || 0;
+                        const disc = parseFloat(discountPct) || 0;
+                        const selling = disc > 0 ? String(Math.round(mrp * (1 - disc / 100))) : productForm.sale_price;
+                        setProductForm(prev => ({ ...prev, price: e.target.value, sale_price: selling }));
+                      }}
+                      className="w-full px-3 py-2 border border-amber-300 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:outline-none bg-white"
+                      placeholder="28000"
+                      data-testid="product-price"
+                    />
+                    <p className="text-xs text-gray-400 mt-0.5">Max retail price</p>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-gray-700 mb-1 block">Discount (%)</label>
+                    <input
+                      type="number"
+                      min="0" max="99"
+                      value={discountPct}
+                      onChange={e => {
+                        const disc = parseFloat(e.target.value) || 0;
+                        const mrp = parseFloat(productForm.price) || 0;
+                        const selling = mrp > 0 && disc > 0 ? String(Math.round(mrp * (1 - disc / 100))) : productForm.sale_price;
+                        setDiscountPct(e.target.value);
+                        setProductForm(prev => ({ ...prev, sale_price: selling }));
+                      }}
+                      className="w-full px-3 py-2 border border-amber-300 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:outline-none bg-white"
+                      placeholder="10"
+                    />
+                    <p className="text-xs text-gray-400 mt-0.5">Auto-calculates</p>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-gray-700 mb-1 block">Selling Price (₹)</label>
+                    <input
+                      type="number"
+                      value={productForm.sale_price}
+                      onChange={e => {
+                        const selling = parseFloat(e.target.value) || 0;
+                        const mrp = parseFloat(productForm.price) || 0;
+                        const disc = mrp > 0 && selling > 0 ? String(Math.round((1 - selling / mrp) * 100)) : "";
+                        setProductForm(prev => ({ ...prev, sale_price: e.target.value }));
+                        if (disc) setDiscountPct(disc);
+                      }}
+                      className="w-full px-3 py-2 border border-green-300 rounded-lg text-sm focus:ring-2 focus:ring-green-500 focus:outline-none bg-white font-semibold text-green-700"
+                      placeholder="leave empty"
+                    />
+                    <p className="text-xs text-gray-400 mt-0.5">Price shown to buyer</p>
+                  </div>
                 </div>
-                <div>
-                  <label className="text-sm font-medium text-gray-700">Compare Price (₹)</label>
-                  <input type="number" value={productForm.compare_price} onChange={e => setProductForm({...productForm, compare_price: e.target.value})}
-                    className="w-full mt-1 px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:outline-none" placeholder="2000" />
-                </div>
+                {productForm.price && (
+                  <div className="flex items-center gap-2 text-sm pt-1 border-t border-amber-200">
+                    <span className="text-gray-500 text-xs">Preview:</span>
+                    {productForm.sale_price && parseFloat(productForm.sale_price) < parseFloat(productForm.price) ? (
+                      <>
+                        <span className="font-bold text-green-700">₹{parseFloat(productForm.sale_price).toLocaleString('en-IN')}</span>
+                        <span className="text-gray-400 line-through text-xs">₹{parseFloat(productForm.price).toLocaleString('en-IN')}</span>
+                        <span className="bg-green-100 text-green-700 text-xs font-bold px-1.5 py-0.5 rounded-full">
+                          {Math.round((1 - parseFloat(productForm.sale_price) / parseFloat(productForm.price)) * 100)}% OFF
+                        </span>
+                      </>
+                    ) : (
+                      <span className="font-bold text-gray-800">₹{parseFloat(productForm.price || 0).toLocaleString('en-IN')}</span>
+                    )}
+                  </div>
+                )}
               </div>
               <div className="grid grid-cols-3 gap-3">
                 <div>
@@ -904,8 +966,14 @@ export const ShopManagement = () => {
                 </label>
               </div>
             </div>
+            {formError && (
+              <div className="mx-4 mb-2 flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 text-sm">
+                <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                <span>{formError}</span>
+              </div>
+            )}
             <div className="sticky bottom-0 bg-white border-t p-4 flex gap-3 rounded-b-2xl">
-              <button onClick={() => setShowProductForm(false)} className="flex-1 py-2.5 border rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-50">Cancel</button>
+              <button onClick={() => { setShowProductForm(false); setFormError(""); }} className="flex-1 py-2.5 border rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-50">Cancel</button>
               <button onClick={handleSaveProduct} disabled={saving}
                 className="flex-1 bg-amber-500 hover:bg-amber-600 disabled:bg-gray-300 text-white py-2.5 rounded-lg text-sm font-medium flex items-center justify-center gap-1.5" data-testid="save-product-btn">
                 {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
