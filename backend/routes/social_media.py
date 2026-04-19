@@ -135,10 +135,10 @@ async def get_social_settings():
     else:
         merged["instagram_connected"] = False
 
-    # Mark the source so admin UI can show "(env)" indicator if desired
-    merged["facebook_token_source"] = (
-        "env" if env_fb_token and not db_settings.get("facebook_access_token") else "db"
-    )
+    # Mark the source as "env" whenever the env var is set — even if the DB
+    # also has a copy. This is the critical guard that prevents test-connection
+    # from auto-disconnecting when the production token lives in an env secret.
+    merged["facebook_token_source"] = "env" if env_fb_token else "db"
     return merged
 
 async def validate_facebook_token(access_token: str, page_id: str):
@@ -392,13 +392,10 @@ async def test_connection():
                 "connected": False,
                 "status": f"Error: {fb_result.get('error', 'Token expired or invalid')}"
             }
-            # Only flip the persisted flag when the failing token came from DB.
-            # Env-driven setups stay "connected" in the UI — the real fix for an
-            # env token is rotation, not silently disconnecting the integration.
-            if settings.get("facebook_token_source") != "env":
-                await db.social_accounts.update_one(
-                    {}, {"$set": {"facebook_connected": False}}, upsert=True
-                )
+            # NOTE: We intentionally do NOT write facebook_connected=False to the
+            # database here. A test is read-only — it must never auto-disconnect.
+            # The user must explicitly disconnect via the UI. This was the primary
+            # cause of the "always auto-disconnected" bug.
     
     # Test Instagram
     if settings.get("facebook_access_token") and settings.get("instagram_account_id"):
@@ -417,14 +414,38 @@ async def test_connection():
                 "connected": False,
                 "status": f"Error: {ig_result.get('error', 'Account invalid')}"
             }
-            if settings.get("facebook_token_source") != "env":
-                await db.social_accounts.update_one(
-                    {}, {"$set": {"instagram_connected": False}}, upsert=True
-                )
+            # NOTE: Same as above — test-connection is read-only, no DB writes.
     
     return results
 
 # ==================== FILE UPLOAD ENDPOINTS ====================
+
+@router.post("/disconnect")
+async def disconnect_social(request: Request):
+    """Explicitly disconnect Facebook and/or Instagram.
+    
+    This is the ONLY sanctioned way to set *_connected to False.
+    The test-connection endpoint never modifies the DB.
+    """
+    data = await request.json()
+    platform = data.get("platform", "all")  # "facebook", "instagram", or "all"
+
+    update = {}
+    if platform in ("facebook", "all"):
+        update["facebook_connected"] = False
+        update["facebook_access_token"] = ""
+        update["facebook_page_id"] = ""
+        update["facebook_page_name"] = ""
+    if platform in ("instagram", "all"):
+        update["instagram_connected"] = False
+        update["instagram_account_id"] = ""
+        update["instagram_username"] = ""
+
+    if update:
+        await db.social_accounts.update_one({}, {"$set": update}, upsert=True)
+
+    return {"success": True, "message": f"{platform.capitalize()} disconnected successfully"}
+
 
 @router.post("/upload/media")
 async def upload_media(file: UploadFile = File(...)):

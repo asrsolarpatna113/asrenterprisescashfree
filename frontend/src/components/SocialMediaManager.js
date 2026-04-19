@@ -718,53 +718,35 @@ const SettingsTab = ({ settings, onRefresh }) => {
   const [igAccountId, setIgAccountId] = useState('');
   const [loading, setLoading] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [disconnecting, setDisconnecting] = useState('');
   const [message, setMessage] = useState({ type: '', text: '' });
   const [testResults, setTestResults] = useState(null);
-  
+  const [showFbForm, setShowFbForm] = useState(!settings.facebook_connected);
+  const [showIgForm, setShowIgForm] = useState(!settings.instagram_connected);
+
   useEffect(() => {
-    setFbPageId(settings.facebook_page_id || '');
-    setIgAccountId(settings.instagram_account_id || '');
+    setShowFbForm(!settings.facebook_connected);
+    setShowIgForm(!settings.instagram_connected);
+    if (!settings.facebook_connected) setFbPageId(settings.facebook_page_id || '');
+    if (!settings.instagram_connected) setIgAccountId(settings.instagram_account_id || '');
   }, [settings]);
-  
-  const handleSave = async () => {
-    setLoading(true);
-    setMessage({ type: '', text: '' });
-    
-    try {
-      await axios.post(`${API}/api/social/settings`, {
-        facebook_page_id: fbPageId,
-        facebook_access_token: fbAccessToken || undefined,
-        instagram_account_id: igAccountId
-      });
-      
-      setMessage({ type: 'success', text: 'Settings saved successfully' });
-      setFbAccessToken('');
-      onRefresh?.();
-    } catch (err) {
-      setMessage({ type: 'error', text: err.response?.data?.detail || 'Failed to save settings' });
-    } finally {
-      setLoading(false);
-    }
-  };
-  
+
   const handleConnectFacebook = async () => {
     if (!fbPageId || !fbAccessToken) {
-      setMessage({ type: 'error', text: 'Page ID and Access Token are required' });
+      setMessage({ type: 'error', text: 'Both Page ID and Access Token are required to connect.' });
       return;
     }
-    
     setLoading(true);
     setMessage({ type: '', text: '' });
-    
     try {
       const res = await axios.post(`${API}/api/social/connect/facebook`, {
         page_id: fbPageId,
         access_token: fbAccessToken
       });
-      
       if (res.data.success) {
         setMessage({ type: 'success', text: res.data.message });
         setFbAccessToken('');
+        setShowFbForm(false);
         onRefresh?.();
       } else {
         setMessage({ type: 'error', text: res.data.error });
@@ -775,23 +757,21 @@ const SettingsTab = ({ settings, onRefresh }) => {
       setLoading(false);
     }
   };
-  
+
   const handleConnectInstagram = async () => {
     if (!igAccountId) {
       setMessage({ type: 'error', text: 'Instagram Business Account ID is required' });
       return;
     }
-    
     setLoading(true);
     setMessage({ type: '', text: '' });
-    
     try {
       const res = await axios.post(`${API}/api/social/connect/instagram`, {
         account_id: igAccountId
       });
-      
       if (res.data.success) {
         setMessage({ type: 'success', text: res.data.message });
+        setShowIgForm(false);
         onRefresh?.();
       } else {
         setMessage({ type: 'error', text: res.data.error });
@@ -802,11 +782,25 @@ const SettingsTab = ({ settings, onRefresh }) => {
       setLoading(false);
     }
   };
-  
+
+  const handleDisconnect = async (platform) => {
+    if (!window.confirm(`Disconnect ${platform === 'facebook' ? 'Facebook' : 'Instagram'}? You will need to reconnect to post again.`)) return;
+    setDisconnecting(platform);
+    setMessage({ type: '', text: '' });
+    try {
+      await axios.post(`${API}/api/social/disconnect`, { platform });
+      setMessage({ type: 'success', text: `${platform === 'facebook' ? 'Facebook' : 'Instagram'} disconnected.` });
+      onRefresh?.();
+    } catch (err) {
+      setMessage({ type: 'error', text: 'Failed to disconnect' });
+    } finally {
+      setDisconnecting('');
+    }
+  };
+
   const handleTestConnection = async () => {
     setTesting(true);
     setTestResults(null);
-    
     try {
       const res = await axios.post(`${API}/api/social/test-connection`);
       setTestResults(res.data);
@@ -816,9 +810,18 @@ const SettingsTab = ({ settings, onRefresh }) => {
       setTesting(false);
     }
   };
-  
+
   return (
-    <div className="max-w-2xl mx-auto space-y-6">
+    <div className="max-w-2xl mx-auto space-y-5">
+      {/* Persistent banner */}
+      <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 text-blue-800 text-sm flex items-start gap-3">
+        <AlertTriangle className="w-5 h-5 text-blue-500 flex-shrink-0 mt-0.5" />
+        <div>
+          <p className="font-semibold mb-1">Credentials are saved permanently</p>
+          <p>Once connected, your Page ID and token are stored securely. They stay connected across restarts and page refreshes — you only need to re-enter them if you want to use a new token or if the current token expires.</p>
+        </div>
+      </div>
+
       {/* Message */}
       {message.text && (
         <div className={`p-4 rounded-xl flex items-center gap-2 ${
@@ -828,161 +831,191 @@ const SettingsTab = ({ settings, onRefresh }) => {
           {message.text}
         </div>
       )}
-      
+
       {/* Permissions Warning */}
       {settings.facebook_connected && !settings.facebook_has_posting_permissions && (
         <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-amber-800">
           <div className="flex items-start gap-3">
             <AlertTriangle className="w-6 h-6 text-amber-600 flex-shrink-0 mt-0.5" />
             <div>
-              <h4 className="font-semibold mb-2">Missing Permissions</h4>
-              <p className="text-sm mb-3">
-                Your Page Access Token is missing required permissions. Posts will fail until you add these permissions:
-              </p>
-              <ul className="text-sm list-disc list-inside space-y-1 mb-3">
-                <li><strong>pages_read_engagement</strong> - Read page content</li>
-                <li><strong>pages_manage_posts</strong> - Publish and manage posts</li>
-                <li><strong>pages_manage_engagement</strong> - Respond to comments</li>
-              </ul>
-              <p className="text-sm font-medium">
-                Steps to fix:
-              </p>
-              <ol className="text-sm list-decimal list-inside space-y-1 mt-1">
-                <li>Go to <a href="https://developers.facebook.com" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">Meta Developer Console</a></li>
-                <li>Select your App → App Review → Permissions</li>
-                <li>Request the permissions listed above</li>
-                <li>Generate a new Page Access Token with these permissions</li>
-                <li>Update the token below</li>
-              </ol>
+              <h4 className="font-semibold mb-1">Missing Permissions</h4>
+              <p className="text-sm mb-2">Token is missing required permissions — posts may fail. Required: <strong>pages_read_engagement</strong>, <strong>pages_manage_posts</strong></p>
+              <p className="text-sm">Go to Meta Developer Console → App Review → Permissions, request those permissions, generate a new Page Access Token, and re-connect below.</p>
             </div>
           </div>
         </div>
       )}
-      
-      {/* Facebook Settings */}
-      <div className="bg-white rounded-2xl p-6 border border-gray-200">
-        <div className="flex items-center gap-3 mb-4">
-          <Facebook className="w-8 h-8 text-blue-600" />
-          <div>
-            <h3 className="text-lg font-semibold text-gray-800">Facebook Page</h3>
-            <div className="flex items-center gap-2 mt-1">
-              <ConnectionBadge connected={settings.facebook_connected} label="Status" />
-              {settings.facebook_connected && settings.facebook_has_posting_permissions && (
-                <span className="bg-green-100 text-green-700 text-xs px-2 py-0.5 rounded-full">Permissions OK</span>
+
+      {/* Facebook Card */}
+      <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
+        <div className="p-5 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Facebook className="w-8 h-8 text-blue-600" />
+            <div>
+              <h3 className="text-base font-semibold text-gray-800">Facebook Page</h3>
+              {settings.facebook_connected && settings.facebook_page_name && (
+                <p className="text-xs text-gray-500 mt-0.5">Page: <strong>{settings.facebook_page_name}</strong></p>
+              )}
+              {settings.facebook_connected && settings.facebook_page_id && (
+                <p className="text-xs text-gray-400">ID: {settings.facebook_page_id}</p>
               )}
             </div>
           </div>
-        </div>
-        
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Facebook Page ID</label>
-            <input
-              type="text"
-              value={fbPageId}
-              onChange={(e) => setFbPageId(e.target.value)}
-              placeholder="Enter your Facebook Page ID"
-              className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
+          <div className="flex items-center gap-2">
+            <ConnectionBadge connected={settings.facebook_connected} label="Status" />
+            {settings.facebook_connected && settings.facebook_has_posting_permissions && (
+              <span className="bg-green-100 text-green-700 text-xs px-2 py-0.5 rounded-full">Permissions OK</span>
+            )}
           </div>
-          
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Page Access Token {settings.facebook_connected && '(Leave empty to keep current)'}
-            </label>
-            <input
-              type="password"
-              value={fbAccessToken}
-              onChange={(e) => setFbAccessToken(e.target.value)}
-              placeholder="Enter Page Access Token"
-              className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
-            <p className="text-xs text-gray-500 mt-1">
-              Get from Facebook Developer Console → Your App → Page Access Token
-            </p>
-          </div>
-          
-          <button
-            onClick={handleConnectFacebook}
-            disabled={loading}
-            className="w-full py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition disabled:opacity-50 flex items-center justify-center gap-2"
-          >
-            {loading ? <RefreshCw className="w-5 h-5 animate-spin" /> : <Link className="w-5 h-5" />}
-            Connect Facebook
-          </button>
         </div>
+
+        {/* Actions row when connected */}
+        {settings.facebook_connected && !showFbForm && (
+          <div className="px-5 pb-4 flex gap-2">
+            <button onClick={() => setShowFbForm(true)}
+              className="flex-1 py-2 border border-blue-300 text-blue-700 rounded-xl text-sm font-medium hover:bg-blue-50 transition flex items-center justify-center gap-1.5">
+              <RefreshCw className="w-4 h-4" /> Update Token / Page ID
+            </button>
+            <button onClick={() => handleDisconnect('facebook')} disabled={disconnecting === 'facebook'}
+              className="px-4 py-2 border border-red-200 text-red-600 rounded-xl text-sm font-medium hover:bg-red-50 transition flex items-center gap-1.5">
+              {disconnecting === 'facebook' ? <RefreshCw className="w-4 h-4 animate-spin" /> : <XCircle className="w-4 h-4" />}
+              Disconnect
+            </button>
+          </div>
+        )}
+
+        {/* Connect / Update form */}
+        {showFbForm && (
+          <div className="border-t border-gray-100 p-5 space-y-4 bg-gray-50">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Facebook Page ID <span className="text-red-500">*</span></label>
+              <input type="text" value={fbPageId} onChange={e => setFbPageId(e.target.value)}
+                placeholder="e.g. 123456789012345"
+                className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm" />
+              <p className="text-xs text-gray-400 mt-1">From your Facebook Page → About → Page ID</p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Page Access Token <span className="text-red-500">*</span>
+              </label>
+              <input type="password" value={fbAccessToken} onChange={e => setFbAccessToken(e.target.value)}
+                placeholder="Enter Page Access Token"
+                className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm" />
+              <p className="text-xs text-gray-400 mt-1">
+                Meta Developer Console → Your App → Tools → Graph API Explorer → Generate Token (select your Page)
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={handleConnectFacebook} disabled={loading}
+                className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition disabled:opacity-50 flex items-center justify-center gap-2 text-sm">
+                {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Link className="w-4 h-4" />}
+                {settings.facebook_connected ? 'Update Connection' : 'Connect Facebook'}
+              </button>
+              {settings.facebook_connected && (
+                <button onClick={() => { setShowFbForm(false); setFbAccessToken(''); }}
+                  className="px-4 py-3 border rounded-xl text-sm text-gray-600 hover:bg-gray-100 transition">
+                  Cancel
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </div>
-      
-      {/* Instagram Settings */}
-      <div className="bg-white rounded-2xl p-6 border border-gray-200">
-        <div className="flex items-center gap-3 mb-4">
-          <Instagram className="w-8 h-8 text-pink-500" />
-          <div>
-            <h3 className="text-lg font-semibold text-gray-800">Instagram Business</h3>
-            <ConnectionBadge connected={settings.instagram_connected} label="Status" />
+
+      {/* Instagram Card */}
+      <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
+        <div className="p-5 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Instagram className="w-8 h-8 text-pink-500" />
+            <div>
+              <h3 className="text-base font-semibold text-gray-800">Instagram Business</h3>
+              {settings.instagram_connected && settings.instagram_username && (
+                <p className="text-xs text-gray-500 mt-0.5">@{settings.instagram_username}</p>
+              )}
+            </div>
           </div>
+          <ConnectionBadge connected={settings.instagram_connected} label="Status" />
         </div>
-        
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Instagram Business Account ID</label>
-            <input
-              type="text"
-              value={igAccountId}
-              onChange={(e) => setIgAccountId(e.target.value)}
-              placeholder="Enter your Instagram Business Account ID"
-              className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-pink-500 focus:border-transparent"
-            />
-            <p className="text-xs text-gray-500 mt-1">
-              Must be linked to your Facebook Page. Get from Facebook Graph API Explorer.
-            </p>
+
+        {settings.instagram_connected && !showIgForm && (
+          <div className="px-5 pb-4 flex gap-2">
+            <button onClick={() => setShowIgForm(true)}
+              className="flex-1 py-2 border border-pink-300 text-pink-700 rounded-xl text-sm font-medium hover:bg-pink-50 transition flex items-center justify-center gap-1.5">
+              <RefreshCw className="w-4 h-4" /> Update Account ID
+            </button>
+            <button onClick={() => handleDisconnect('instagram')} disabled={disconnecting === 'instagram'}
+              className="px-4 py-2 border border-red-200 text-red-600 rounded-xl text-sm font-medium hover:bg-red-50 transition flex items-center gap-1.5">
+              {disconnecting === 'instagram' ? <RefreshCw className="w-4 h-4 animate-spin" /> : <XCircle className="w-4 h-4" />}
+              Disconnect
+            </button>
           </div>
-          
-          <button
-            onClick={handleConnectInstagram}
-            disabled={loading || !settings.facebook_connected}
-            className="w-full py-3 bg-gradient-to-r from-pink-500 to-purple-600 text-white rounded-xl font-medium hover:from-pink-600 hover:to-purple-700 transition disabled:opacity-50 flex items-center justify-center gap-2"
-          >
-            {loading ? <RefreshCw className="w-5 h-5 animate-spin" /> : <Link className="w-5 h-5" />}
-            Connect Instagram
-          </button>
-          {!settings.facebook_connected && (
-            <p className="text-xs text-amber-600 text-center">Connect Facebook first to enable Instagram</p>
-          )}
-        </div>
+        )}
+
+        {showIgForm && (
+          <div className="border-t border-gray-100 p-5 space-y-4 bg-gray-50">
+            {!settings.facebook_connected && (
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-amber-700 text-sm flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                Connect Facebook first — Instagram uses the same access token.
+              </div>
+            )}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Instagram Business Account ID <span className="text-red-500">*</span></label>
+              <input type="text" value={igAccountId} onChange={e => setIgAccountId(e.target.value)}
+                placeholder="e.g. 17841400455940200"
+                className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-pink-500 focus:border-transparent text-sm" />
+              <p className="text-xs text-gray-400 mt-1">Must be linked to your Facebook Page. Get it from Graph API Explorer: GET /me/accounts → find your page → GET /{"{page-id}"}?fields=instagram_business_account</p>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={handleConnectInstagram} disabled={loading || !settings.facebook_connected}
+                className="flex-1 py-3 bg-gradient-to-r from-pink-500 to-purple-600 text-white rounded-xl font-medium hover:from-pink-600 hover:to-purple-700 transition disabled:opacity-50 flex items-center justify-center gap-2 text-sm">
+                {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Link className="w-4 h-4" />}
+                {settings.instagram_connected ? 'Update Connection' : 'Connect Instagram'}
+              </button>
+              {settings.instagram_connected && (
+                <button onClick={() => { setShowIgForm(false); }}
+                  className="px-4 py-3 border rounded-xl text-sm text-gray-600 hover:bg-gray-100 transition">
+                  Cancel
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </div>
-      
-      {/* Test Connection */}
-      <div className="bg-white rounded-2xl p-6 border border-gray-200">
-        <h3 className="text-lg font-semibold text-gray-800 mb-4">Test Connections</h3>
-        
-        <button
-          onClick={handleTestConnection}
-          disabled={testing}
-          className="w-full py-3 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded-xl font-medium transition flex items-center justify-center gap-2"
-        >
+
+      {/* Test Connection — read-only, never auto-disconnects */}
+      <div className="bg-white rounded-2xl p-5 border border-gray-200">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-base font-semibold text-gray-800">Verify Live Connection</h3>
+          <span className="text-xs text-gray-400 bg-gray-100 px-2 py-1 rounded-full">Read-only test</span>
+        </div>
+        <p className="text-xs text-gray-500 mb-3">Pings Facebook/Instagram API to confirm tokens are valid right now. Does not change your connection status.</p>
+        <button onClick={handleTestConnection} disabled={testing}
+          className="w-full py-3 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded-xl font-medium transition flex items-center justify-center gap-2 text-sm">
           {testing ? <RefreshCw className="w-5 h-5 animate-spin" /> : <CheckCircle className="w-5 h-5" />}
           {testing ? 'Testing...' : 'Test All Connections'}
         </button>
-        
         {testResults && (
           <div className="mt-4 space-y-2">
-            <div className={`p-3 rounded-lg ${testResults.facebook?.connected ? 'bg-green-50' : 'bg-red-50'}`}>
-              <div className="flex items-center gap-2">
-                <Facebook className="w-5 h-5 text-blue-600" />
-                <span className={`font-medium ${testResults.facebook?.connected ? 'text-green-700' : 'text-red-700'}`}>
-                  Facebook: {testResults.facebook?.status}
-                </span>
-              </div>
+            <div className={`p-3 rounded-xl flex items-center gap-2 ${testResults.facebook?.connected ? 'bg-green-50' : 'bg-red-50'}`}>
+              <Facebook className="w-5 h-5 text-blue-600" />
+              <span className={`text-sm font-medium ${testResults.facebook?.connected ? 'text-green-700' : 'text-red-700'}`}>
+                Facebook: {testResults.facebook?.status}
+                {testResults.facebook?.page_name && ` (${testResults.facebook.page_name})`}
+              </span>
             </div>
-            <div className={`p-3 rounded-lg ${testResults.instagram?.connected ? 'bg-green-50' : 'bg-red-50'}`}>
-              <div className="flex items-center gap-2">
-                <Instagram className="w-5 h-5 text-pink-500" />
-                <span className={`font-medium ${testResults.instagram?.connected ? 'text-green-700' : 'text-red-700'}`}>
-                  Instagram: {testResults.instagram?.status}
-                </span>
-              </div>
+            <div className={`p-3 rounded-xl flex items-center gap-2 ${testResults.instagram?.connected ? 'bg-green-50' : 'bg-red-50'}`}>
+              <Instagram className="w-5 h-5 text-pink-500" />
+              <span className={`text-sm font-medium ${testResults.instagram?.connected ? 'text-green-700' : 'text-red-700'}`}>
+                Instagram: {testResults.instagram?.status}
+                {testResults.instagram?.username && ` (@${testResults.instagram.username})`}
+              </span>
             </div>
+            {(!testResults.facebook?.connected || !testResults.instagram?.connected) && (
+              <p className="text-xs text-gray-500 mt-2 p-2 bg-gray-50 rounded-lg">
+                If the test fails but you're still connected, the token may have expired. Use "Update Token" above to enter a new one — your connection status stays intact until you explicitly reconnect or disconnect.
+              </p>
+            )}
           </div>
         )}
       </div>
