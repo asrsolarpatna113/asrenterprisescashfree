@@ -1213,9 +1213,25 @@ async def sync_facebook_posts_to_gallery():
     posts = posts_result.get("posts", [])
     synced_count = 0
     
+    # Keywords that identify an installation work post
+    INSTALLATION_KEYWORDS = [
+        "install", "solar system", "kw", "kva", "ongrid", "on grid", "offgrid",
+        "off grid", "rooftop", "panel", "inverter", "completed", "work done",
+        "site", "watt", "mw", "system installed", "solar work",
+    ]
+
+    def _is_installation_post(caption: str) -> bool:
+        caption_lower = caption.lower()
+        return any(kw in caption_lower for kw in INSTALLATION_KEYWORDS)
+
     for post in posts:
         # Only sync posts with media
         if not post.get("media_url") and not post.get("full_picture"):
+            continue
+
+        # Only sync installation-related posts (filter by caption keywords)
+        caption = post.get("message", "")
+        if not _is_installation_post(caption):
             continue
         
         # Check if already synced

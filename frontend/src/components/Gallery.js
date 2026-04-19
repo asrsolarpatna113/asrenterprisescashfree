@@ -191,7 +191,7 @@ export const GalleryPage = () => {
   const [facebookPhotos, setFacebookPhotos] = useState([]); // Facebook general posts
   const [latestWorkPhotos, setLatestWorkPhotos] = useState([]); // Admin-selected installation work
   const [loading, setLoading] = useState(true);
-  const [activeFilter, setActiveFilter] = useState('all'); // 'all', 'uploads', 'facebook'
+  const [activeFilter, setActiveFilter] = useState('facebook'); // 'facebook' = Latest Installation Work, 'all' = Facebook Posts
 
   // Static gallery items (original photos)
   const staticGalleryItems = [
@@ -388,17 +388,6 @@ export const GalleryPage = () => {
           {/* Filter Tabs */}
           <div className="flex items-center space-x-2 bg-gray-100 rounded-xl p-1">
             <button 
-              onClick={() => setActiveFilter('all')}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
-                activeFilter === 'all' 
-                  ? 'bg-white text-[#0B3C5D] shadow-sm' 
-                  : 'text-gray-600 hover:text-[#0B3C5D]'
-              }`}
-              data-testid="filter-all-btn"
-            >
-              Facebook Posts ({facebookPhotos.length})
-            </button>
-            <button 
               onClick={() => setActiveFilter('facebook')}
               className={`px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-1.5 ${
                 activeFilter === 'facebook' 
@@ -407,19 +396,20 @@ export const GalleryPage = () => {
               }`}
               data-testid="filter-facebook-btn"
             >
-              <Facebook className="w-4 h-4" />
+              <Zap className="w-4 h-4" />
               Latest Installation Work ({latestWorkPhotos.length})
             </button>
             <button 
-              onClick={() => setActiveFilter('uploads')}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
-                activeFilter === 'uploads' 
-                  ? 'bg-white text-[#0B3C5D] shadow-sm' 
-                  : 'text-gray-600 hover:text-[#0B3C5D]'
+              onClick={() => setActiveFilter('all')}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-1.5 ${
+                activeFilter === 'all' 
+                  ? 'bg-white text-[#1877F2] shadow-sm' 
+                  : 'text-gray-600 hover:text-[#1877F2]'
               }`}
-              data-testid="filter-uploads-btn"
+              data-testid="filter-all-btn"
             >
-              Uploads ({dynamicPhotos.length + staticGalleryItems.length})
+              <Facebook className="w-4 h-4" />
+              Facebook Posts ({facebookPhotos.length})
             </button>
           </div>
 
@@ -435,8 +425,16 @@ export const GalleryPage = () => {
           </button>
         </div>
 
-        {/* Facebook Notice */}
-        {activeFilter === 'facebook' && facebookPhotos.length > 0 && (
+        {/* Context notice per tab */}
+        {activeFilter === 'facebook' && latestWorkPhotos.length > 0 && (
+          <div className="mb-6 bg-green-50 border border-green-200 rounded-xl p-4 flex items-center gap-3">
+            <Zap className="w-5 h-5 text-green-600 flex-shrink-0" />
+            <p className="text-sm text-green-700">
+              Showing our latest <strong>solar installation projects</strong> from across Bihar.
+            </p>
+          </div>
+        )}
+        {activeFilter === 'all' && facebookPhotos.length > 0 && (
           <div className="mb-6 bg-blue-50 border border-blue-200 rounded-xl p-4 flex items-center gap-3">
             <Facebook className="w-5 h-5 text-blue-600 flex-shrink-0" />
             <p className="text-sm text-blue-700">

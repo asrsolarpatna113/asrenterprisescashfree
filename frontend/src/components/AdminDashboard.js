@@ -1,6 +1,6 @@
 import { Link, useNavigate } from "react-router-dom";
 import { useState, useEffect, useCallback } from "react";
-import { Users, LogOut, ClipboardList, Image, Star, Calendar, Newspaper, Shield, TrendingUp, Share2, LayoutDashboard, Loader2, RefreshCw, UserCog, ShoppingCart, Sun, MessageCircle } from "lucide-react";
+import { Users, LogOut, ClipboardList, Star, Calendar, Newspaper, Shield, TrendingUp, Share2, LayoutDashboard, Loader2, RefreshCw, UserCog, ShoppingCart, Sun, MessageCircle } from "lucide-react";
 import axios from "axios";
 import { useAutoLogout } from "@/hooks/useAutoLogout";
 
@@ -116,14 +116,6 @@ export const AdminDashboard = ({ onLogout }) => {
       count: "FB & IG"
     },
     {
-      title: "Gallery",
-      description: "Manage work photos & installations",
-      icon: <Image className="w-10 h-10" />,
-      link: "/admin/gallery",
-      color: "from-cyan-500 to-blue-600",
-      count: "Photos"
-    },
-    {
       title: "Testimonials",
       description: "Generate & manage customer reviews",
       icon: <Star className="w-10 h-10" />,
@@ -198,7 +190,6 @@ export const AdminDashboard = ({ onLogout }) => {
     "Leads Management",
     "Customer Portal",
     "Social Media",
-    "Gallery",
     "Testimonials",
     "Festival Posts",
     "WhatsApp API",
