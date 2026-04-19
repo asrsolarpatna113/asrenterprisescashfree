@@ -38,18 +38,68 @@ export const ShopManagement = () => {
   const [photoUploading, setPhotoUploading] = useState(false);
   const photoInputRef = useRef(null);
   const [productForm, setProductForm] = useState({
-    name: "", description: "", price: "", compare_price: "",
+    name: "", description: "", price: "", sale_price: "",
     category: "solar_panel", stock: "10", unit: "piece",
-    specifications: "", features: "", warranty: "",
+    specifications: "", warranty: "",
     is_active: true, is_featured: false
   });
+  const [discountPct, setDiscountPct] = useState("");
+  const [formError, setFormError] = useState("");
+  const [successMsg, setSuccessMsg] = useState("");
+  const [districtFees, setDistrictFees] = useState({});
+  const [biharDistricts, setBiharDistricts] = useState([]);
+  const [loadingFees, setLoadingFees] = useState(false);
+  const [savingFees, setSavingFees] = useState(false);
+  const [bookServicePrice, setBookServicePrice] = useState("");
+  const [savingServicePrice, setSavingServicePrice] = useState(false);
 
   useEffect(() => { fetchAll(); }, []);
 
   const fetchAll = async () => {
     setLoading(true);
-    await Promise.all([fetchProducts(), fetchOrders(), fetchStats()]);
+    await Promise.all([fetchProducts(), fetchOrders(), fetchStats(), fetchDistrictFees(), fetchBookServicePrice()]);
     setLoading(false);
+  };
+
+  const fetchDistrictFees = async () => {
+    setLoadingFees(true);
+    try {
+      const res = await axios.get(`${API}/admin/district-fees`);
+      setDistrictFees(res.data.fees || {});
+      setBiharDistricts(res.data.districts || []);
+    } catch (err) { console.error("District fees fetch error:", err); }
+    setLoadingFees(false);
+  };
+
+  const fetchBookServicePrice = async () => {
+    try {
+      const res = await axios.get(`${API}/shop/book-service-config`);
+      setBookServicePrice(String(res.data.price || ""));
+    } catch (err) { console.error("Book service price fetch:", err); }
+  };
+
+  const saveDistrictFees = async () => {
+    setSavingFees(true);
+    try {
+      await axios.put(`${API}/shop/bihar-districts/fees`, { delivery_fees: districtFees });
+      setSuccessMsg("Delivery fees updated on ASR Solar Hub!");
+      setTimeout(() => setSuccessMsg(""), 4000);
+    } catch (err) {
+      alert("Failed to update delivery fees. Please try again.");
+    }
+    setSavingFees(false);
+  };
+
+  const saveBookServicePrice = async () => {
+    setSavingServicePrice(true);
+    try {
+      await axios.put(`${API}/shop/book-service-config`, { price: Number(bookServicePrice) });
+      setSuccessMsg("Service price updated!");
+      setTimeout(() => setSuccessMsg(""), 4000);
+    } catch (err) {
+      alert("Failed to update service price.");
+    }
+    setSavingServicePrice(false);
   };
 
   const fetchProducts = async () => {
@@ -97,18 +147,29 @@ export const ShopManagement = () => {
   };
 
   const handleSaveProduct = async () => {
-    if (!productForm.name || !productForm.price) {
-      alert("Name and Price are required"); return;
-    }
+    setFormError("");
+    if (!productForm.name?.trim()) { setFormError("Product name is required."); return; }
+    const mrp = parseFloat(productForm.price);
+    if (!mrp || mrp <= 0) { setFormError("Please enter a valid MRP."); return; }
+
     setSaving(true);
     try {
+      const sellingPrice = productForm.sale_price ? parseFloat(productForm.sale_price) : null;
+      const highlights = productForm.specifications
+        ? productForm.specifications.split("\n").filter(Boolean)
+        : [];
       const payload = {
-        ...productForm,
-        price: parseFloat(productForm.price),
-        compare_price: productForm.compare_price ? parseFloat(productForm.compare_price) : null,
+        name: productForm.name,
+        description: productForm.description,
+        category: productForm.category,
+        price: mrp,
+        sale_price: sellingPrice,
         stock: parseInt(productForm.stock) || 0,
-        specifications: productForm.specifications ? productForm.specifications.split("\n").filter(Boolean) : [],
-        features: productForm.features ? productForm.features.split("\n").filter(Boolean) : []
+        unit: productForm.unit,
+        warranty: productForm.warranty,
+        product_highlights: highlights,
+        is_active: productForm.is_active,
+        is_featured: productForm.is_featured
       };
 
       let savedProductId = editingProduct?.id;
@@ -119,7 +180,6 @@ export const ShopManagement = () => {
         savedProductId = res.data?.id || res.data?.product?.id;
       }
 
-      // Upload photo if selected
       if (photoFile && savedProductId) {
         await uploadPhoto(savedProductId);
       }
@@ -130,8 +190,20 @@ export const ShopManagement = () => {
       setPhotoPreview(null);
       resetForm();
       await fetchProducts();
+      setSuccessMsg(editingProduct ? "Product updated successfully!" : "Product added to shop!");
+      setTimeout(() => setSuccessMsg(""), 4000);
     } catch (err) {
-      alert(err.response?.data?.detail || "Error saving product");
+      console.error("Save product error:", err);
+      const detail = err?.response?.data?.detail;
+      let msg;
+      if (Array.isArray(detail)) {
+        msg = detail.map(e => e.msg || JSON.stringify(e)).join("; ");
+      } else if (typeof detail === "string") {
+        msg = detail;
+      } else {
+        msg = err?.message || "Failed to save product. Please try again.";
+      }
+      setFormError(msg);
     }
     setSaving(false);
   };
@@ -146,22 +218,31 @@ export const ShopManagement = () => {
 
   const handleEditProduct = (product) => {
     setEditingProduct(product);
+    const mrp = product.price || 0;
+    const selling = product.sale_price || 0;
+    const disc = mrp > 0 && selling > 0 && selling < mrp
+      ? String(Math.round((1 - selling / mrp) * 100))
+      : "";
+    const highlights = Array.isArray(product.product_highlights) ? product.product_highlights.join("\n")
+      : Array.isArray(product.specifications) ? product.specifications.join("\n")
+      : "";
     setProductForm({
       name: product.name || "",
       description: product.description || "",
-      price: product.price?.toString() || "",
-      compare_price: product.compare_price?.toString() || "",
+      price: mrp.toString(),
+      sale_price: selling > 0 ? selling.toString() : "",
       category: product.category || "solar_panel",
       stock: product.stock?.toString() || "0",
       unit: product.unit || "piece",
-      specifications: Array.isArray(product.specifications) ? product.specifications.join("\n") : "",
-      features: Array.isArray(product.features) ? product.features.join("\n") : "",
+      specifications: highlights,
       warranty: product.warranty || "",
       is_active: product.is_active !== false,
       is_featured: product.is_featured || false
     });
+    setDiscountPct(disc);
+    setFormError("");
     setPhotoFile(null);
-    setPhotoPreview(product.image_url || null);
+    setPhotoPreview(product.images?.[0] || product.image_url || null);
     setShowProductForm(true);
   };
 
@@ -181,11 +262,13 @@ export const ShopManagement = () => {
 
   const resetForm = () => {
     setProductForm({
-      name: "", description: "", price: "", compare_price: "",
+      name: "", description: "", price: "", sale_price: "",
       category: "solar_panel", stock: "10", unit: "piece",
-      specifications: "", features: "", warranty: "",
+      specifications: "", warranty: "",
       is_active: true, is_featured: false
     });
+    setDiscountPct("");
+    setFormError("");
     setPhotoFile(null);
     setPhotoPreview(null);
     if (photoInputRef.current) photoInputRef.current.value = "";
@@ -267,6 +350,14 @@ export const ShopManagement = () => {
       </div>
 
       <div className="max-w-7xl mx-auto px-4 py-6">
+        {/* Success banner */}
+        {successMsg && (
+          <div className="mb-4 flex items-center gap-2 bg-green-50 border border-green-300 text-green-800 rounded-xl px-4 py-3 text-sm font-medium">
+            <CheckCircle className="w-4 h-4 text-green-600 flex-shrink-0" />
+            {successMsg}
+          </div>
+        )}
+
         {/* ===== DASHBOARD TAB ===== */}
         {activeTab === "dashboard" && (
           <div className="space-y-6">
@@ -413,10 +504,17 @@ export const ShopManagement = () => {
                         {product.is_active === false && <EyeOff className="w-4 h-4 text-red-400" />}
                       </div>
                     </div>
-                    <div className="flex items-baseline gap-2 mb-2">
-                      <span className="text-lg font-bold text-amber-600">₹{(product.price || 0).toLocaleString()}</span>
-                      {product.compare_price && (
-                        <span className="text-sm text-gray-400 line-through">₹{product.compare_price.toLocaleString()}</span>
+                    <div className="flex items-baseline gap-2 mb-2 flex-wrap">
+                      <span className="text-lg font-bold text-amber-600">
+                        ₹{((product.sale_price || product.price) || 0).toLocaleString('en-IN')}
+                      </span>
+                      {product.sale_price && product.sale_price < product.price && (
+                        <>
+                          <span className="text-sm text-gray-400 line-through">₹{product.price.toLocaleString('en-IN')}</span>
+                          <span className="text-xs bg-green-100 text-green-700 font-bold px-1.5 py-0.5 rounded-full">
+                            {Math.round((1 - product.sale_price / product.price) * 100)}% OFF
+                          </span>
+                        </>
                       )}
                       {product.unit && product.unit !== "piece" && (
                         <span className="text-xs text-gray-500">/{product.unit}</span>
@@ -580,13 +678,79 @@ export const ShopManagement = () => {
         {/* ===== SETTINGS TAB ===== */}
         {activeTab === "settings" && (
           <div className="space-y-6">
+
+            {/* Book Service Price */}
             <div className="bg-white rounded-xl border shadow-sm p-6">
-              <h3 className="font-semibold text-gray-900 mb-4 flex items-center gap-2"><Truck className="w-5 h-5" /> Delivery Settings</h3>
-              <p className="text-sm text-gray-500 mb-3">Delivery is available across Bihar. Manage district-wise delivery fees from CRM.</p>
-              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-700">
-                Store Pickup: Free | Home Delivery: District-based fees
+              <h3 className="font-semibold text-gray-900 mb-1 flex items-center gap-2">
+                <DollarSign className="w-5 h-5 text-amber-500" /> Book Solar Service Price
+              </h3>
+              <p className="text-sm text-gray-400 mb-4">This price is shown on the homepage "Book Service" button.</p>
+              <div className="flex items-center gap-3">
+                <span className="text-gray-600 text-sm font-medium">₹</span>
+                <input
+                  type="number"
+                  value={bookServicePrice}
+                  onChange={e => setBookServicePrice(e.target.value)}
+                  className="w-36 px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                  placeholder="1500"
+                />
+                <button
+                  onClick={saveBookServicePrice}
+                  disabled={savingServicePrice}
+                  className="flex items-center gap-1.5 bg-amber-500 hover:bg-amber-600 disabled:bg-gray-300 text-white px-4 py-2 rounded-lg text-sm font-medium transition"
+                >
+                  {savingServicePrice ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  {savingServicePrice ? "Saving..." : "Update Price"}
+                </button>
               </div>
             </div>
+
+            {/* Delivery Fees by District */}
+            <div className="bg-white rounded-xl border shadow-sm p-6">
+              <div className="flex items-center justify-between mb-1">
+                <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+                  <Truck className="w-5 h-5 text-blue-500" /> District-wise Delivery Fees
+                </h3>
+                <button
+                  onClick={saveDistrictFees}
+                  disabled={savingFees}
+                  className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white px-4 py-2 rounded-lg text-sm font-medium transition"
+                >
+                  {savingFees ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  {savingFees ? "Saving..." : "Save All Fees"}
+                </button>
+              </div>
+              <p className="text-sm text-gray-400 mb-4">Set delivery charge per district across Bihar. Changes apply to ASR Solar Hub immediately on save.</p>
+              {loadingFees ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="w-6 h-6 text-blue-500 animate-spin" />
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                  {biharDistricts.map(district => (
+                    <div key={district} className="flex flex-col gap-1">
+                      <label className="text-xs font-medium text-gray-600 truncate">{district}</label>
+                      <div className="flex items-center gap-1">
+                        <span className="text-gray-400 text-xs">₹</span>
+                        <input
+                          type="number"
+                          value={districtFees[district] ?? ""}
+                          onChange={e => setDistrictFees(prev => ({ ...prev, [district]: Number(e.target.value) || 0 }))}
+                          className="w-full px-2 py-1.5 border rounded-lg text-sm focus:ring-2 focus:ring-blue-400 focus:outline-none"
+                          placeholder="0"
+                        />
+                      </div>
+                    </div>
+                  ))}
+                  {biharDistricts.length === 0 && (
+                    <p className="text-gray-400 text-sm col-span-4">Loading districts...</p>
+                  )}
+                </div>
+              )}
+              <p className="text-xs text-gray-400 mt-3">Store Pickup is always free. District fees apply to home delivery orders.</p>
+            </div>
+
+            {/* Payment Gateway Info */}
             <div className="bg-white rounded-xl border shadow-sm p-6">
               <h3 className="font-semibold text-gray-900 mb-4 flex items-center gap-2"><Tag className="w-5 h-5" /> Payment Gateway</h3>
               <p className="text-sm text-gray-600 mb-2">Cashfree Payments (Production Mode)</p>
@@ -595,6 +759,8 @@ export const ShopManagement = () => {
                 <span className="text-sm text-green-700">UPI, Cards, Net Banking, Wallets enabled</span>
               </div>
             </div>
+
+            {/* Quick Actions */}
             <div className="bg-white rounded-xl border shadow-sm p-6">
               <h3 className="font-semibold text-gray-900 mb-4 flex items-center gap-2"><Box className="w-5 h-5" /> Quick Actions</h3>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
