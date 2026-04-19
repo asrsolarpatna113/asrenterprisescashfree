@@ -221,8 +221,8 @@ export const ShopPage = () => {
   };
 
   const shareProduct = (product, platform) => {
-    const url = `${window.location.origin}/shop`;
-    const text = `Check out ${product.name} - ₹${(product.sale_price || product.price).toLocaleString()} at ASR Enterprises!`;
+    const url = `${window.location.origin}/shop?product=${encodeURIComponent(product.id)}`;
+    const text = `Check out ${product.name} - ₹${(product.sale_price || product.price).toLocaleString()} at ASR Enterprises Solar Hub!`;
     const shareUrls = {
       whatsapp: `https://wa.me/?text=${encodeURIComponent(text + "\n" + url)}`,
       facebook: `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(url)}&quote=${encodeURIComponent(text)}`,

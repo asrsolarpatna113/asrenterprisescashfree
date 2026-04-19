@@ -255,7 +255,7 @@ SECURITY_HEADERS = {
     "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
     "X-Permitted-Cross-Domain-Policies": "none",
     "Cross-Origin-Opener-Policy": "same-origin",
-    "Cross-Origin-Resource-Policy": "same-site"
+    "Cross-Origin-Resource-Policy": "cross-origin"
 }
 
 # Input validation patterns
@@ -12948,7 +12948,7 @@ def _build_og_block(title: str, description: str, image: str, canonical: str) ->
         <meta name="twitter:image:alt" content="{t}" />
         <!-- DYNAMIC_OG_END -->"""
 
-async def _resolve_og(path: str):
+async def _resolve_og(path: str, product_id: str = ""):
     """Return (title, description, image, canonical) for a given URL path."""
     path = "/" + path.strip("/")
 
@@ -12988,8 +12988,33 @@ async def _resolve_og(path: str):
             _OG_BASE_URL + "/contact",
         )
 
-    # Shop
+    # Shop (with optional ?product=id for product-specific OG)
     if path.rstrip("/") == "/shop":
+        if product_id:
+            # Fetch product from DB and return product-specific OG
+            try:
+                cached_product = _OG_PRODUCT_CACHE.get(product_id)
+                if not cached_product:
+                    cached_product = await db.shop_products.find_one(
+                        {"id": product_id},
+                        {"_id": 0, "name": 1, "description": 1, "short_description": 1, "images": 1, "brand": 1, "sale_price": 1, "price": 1}
+                    )
+                    if cached_product:
+                        _OG_PRODUCT_CACHE[product_id] = cached_product
+                if cached_product:
+                    p_name = cached_product.get("name", "Solar Product")
+                    p_brand = cached_product.get("brand", "")
+                    p_desc = (cached_product.get("short_description") or cached_product.get("description", ""))[:160]
+                    p_price = cached_product.get("sale_price") or cached_product.get("price", "")
+                    p_imgs = cached_product.get("images") or []
+                    p_img = next((u for u in p_imgs if isinstance(u, str) and u.startswith("http")), _OG_SHOP_IMAGE)
+                    t = f"{p_name}" + (f" by {p_brand}" if p_brand else "") + " | ASR Enterprises"
+                    d = p_desc or f"Buy {p_name} at ASR Enterprises Solar Hub. Quality solar products with doorstep delivery in Bihar."
+                    if p_price:
+                        d = d[:120] + f" Price: ₹{p_price}" if len(d) > 120 else d + f" Price: ₹{p_price}"
+                    return (t, d, p_img, f"{_OG_BASE_URL}/shop?product={product_id}")
+            except Exception as _pe:
+                logger.warning(f"OG product lookup failed for {product_id}: {_pe}")
         return (
             "Solar Shop - ASR Enterprises",
             "Buy solar panels, inverters, batteries and accessories online. Quality products, doorstep delivery in Bihar.",
@@ -13050,10 +13075,12 @@ async def serve_spa(full_path: str, request: Request):
     # Determine if this path needs dynamic OG injection.
     # We inject for known page routes; fall through to plain FileResponse for anything else.
     path = "/" + full_path.strip("/")
+    product_id = request.query_params.get("product", "").strip()
     needs_og = (
         path in ("/", "")
         or path.rstrip("/") in ("/advisor", "/gallery", "/contact", "/shop", "/about")
         or bool(re.match(r"^/product/[^/?#]+$", path))
+        or (path.rstrip("/") == "/shop" and bool(product_id))
     )
 
     if not needs_og:
@@ -13062,7 +13089,7 @@ async def serve_spa(full_path: str, request: Request):
 
     # Resolve OG meta for this route and inject into HTML
     try:
-        title, description, image, canonical = await _resolve_og(path)
+        title, description, image, canonical = await _resolve_og(path, product_id=product_id)
         og_block = _build_og_block(title, description, image, canonical)
         html = index_file.read_text(encoding="utf-8")
 
