@@ -483,6 +483,10 @@ async def create_indexes():
         await db.orders.create_index([("customer_details.phone", 1)])
         await db.orders.create_index([("payment_id", 1)], sparse=True)
         
+        # WhatsApp opt-out collection — must be fast for every outgoing message
+        await db.wa_optouts.create_index([("phone", 1)], unique=True)
+        await db.wa_optouts.create_index([("opted_out", 1)])
+
         # Products collection indexes
         await db.products.create_index([("category", 1)])
         await db.products.create_index([("price", 1)])

@@ -551,13 +551,14 @@ const CRMInboxView = () => {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
-  const [counts, setCounts] = useState({ replies: 0, failed: 0, follow_up: 0, bulk_sent: 0 });
+  const [counts, setCounts] = useState({ replies: 0, failed: 0, follow_up: 0, bulk_sent: 0, opted_out: 0 });
 
   const filters = [
     { id: 'replies',    label: 'Replies',    icon: Flame,       color: 'green',  desc: 'Customers who replied' },
     { id: 'failed',     label: 'Failed',     icon: XCircle,     color: 'red',    desc: 'Template delivery failed' },
     { id: 'follow_up',  label: 'Follow-up',  icon: Clock,       color: 'yellow', desc: 'Delivered but not read' },
     { id: 'bulk_sent',  label: 'Bulk Sent',  icon: RadioTower,  color: 'blue',   desc: 'All campaign recipients' },
+    { id: 'opted_out',  label: 'Opted Out',  icon: XCircle,     color: 'gray',   desc: 'Sent STOP — do not message' },
   ];
 
   const colorMap = {
@@ -565,6 +566,7 @@ const CRMInboxView = () => {
     red:    { tab: 'bg-red-500 text-white',    badge: 'bg-red-100 text-red-700',      border: 'border-red-300',    dot: 'bg-red-400',   pill: 'bg-red-50' },
     yellow: { tab: 'bg-yellow-500 text-white', badge: 'bg-yellow-100 text-yellow-700',border: 'border-yellow-300', dot: 'bg-yellow-400',pill: 'bg-yellow-50' },
     blue:   { tab: 'bg-blue-500 text-white',   badge: 'bg-blue-100 text-blue-700',    border: 'border-blue-300',   dot: 'bg-blue-400',  pill: 'bg-blue-50' },
+    gray:   { tab: 'bg-gray-500 text-white',   badge: 'bg-gray-100 text-gray-700',    border: 'border-gray-300',   dot: 'bg-gray-400',  pill: 'bg-gray-50' },
   };
 
   const fetchLeads = useCallback(async (filter, pg) => {
@@ -582,12 +584,12 @@ const CRMInboxView = () => {
   const fetchCounts = useCallback(async () => {
     try {
       const results = await Promise.allSettled(
-        ['replies', 'failed', 'follow_up', 'bulk_sent'].map(f =>
+        ['replies', 'failed', 'follow_up', 'bulk_sent', 'opted_out'].map(f =>
           axios.get(`${API}/api/whatsapp/crm-inbox?filter=${f}&page=1&limit=1`)
         )
       );
-      const [r, f, fu, bs] = results.map(r => r.status === 'fulfilled' ? r.value.data.total : 0);
-      setCounts({ replies: r, failed: f, follow_up: fu, bulk_sent: bs });
+      const [r, f, fu, bs, oo] = results.map(r => r.status === 'fulfilled' ? r.value.data.total : 0);
+      setCounts({ replies: r, failed: f, follow_up: fu, bulk_sent: bs, opted_out: oo });
     } catch (e) { /* silent */ }
   }, []);
 
@@ -602,6 +604,7 @@ const CRMInboxView = () => {
 
   const getStatusBadges = (lead) => {
     const badges = [];
+    if (lead.wa_opted_out) badges.push({ label: '🚫 Opted Out', cls: 'bg-gray-200 text-gray-700 font-bold' });
     if (lead.wa_reply_received) badges.push({ label: '💬 Replied', cls: 'bg-green-100 text-green-700' });
     if (lead.wa_read)      badges.push({ label: '👁 Read',    cls: 'bg-blue-100 text-blue-700' });
     if (lead.wa_delivered) badges.push({ label: '✓ Delivered', cls: 'bg-gray-100 text-gray-700' });
@@ -691,6 +694,7 @@ const CRMInboxView = () => {
                 <div
                   key={lead.id}
                   className={`px-4 py-3 hover:bg-gray-50 transition border-l-4 ${
+                    lead.wa_opted_out ? 'border-l-gray-400 bg-gray-50/60 opacity-75' :
                     isReply  ? 'border-l-green-400' :
                     isFailed ? 'border-l-red-400' :
                     lead.wa_read ? 'border-l-blue-400' :
@@ -702,6 +706,7 @@ const CRMInboxView = () => {
                     {/* Lead info */}
                     <div className="flex items-start gap-3 min-w-0">
                       <div className={`w-9 h-9 rounded-full flex items-center justify-center text-white text-sm font-bold shrink-0 ${
+                        lead.wa_opted_out ? 'bg-gray-400' :
                         isReply  ? 'bg-green-500' :
                         isFailed ? 'bg-red-500' :
                         'bg-gray-400'

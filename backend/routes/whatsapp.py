@@ -130,7 +130,13 @@ async def send_whatsapp_template(
     cleaned_phone = clean_phone_number(phone, settings.get("default_country_code", "91"))
     if not cleaned_phone:
         return {"success": False, "error": f"Invalid phone number: {phone}"}
-    
+
+    # ── OPT-OUT GUARD ── Never send to a user who opted out ───────────────────
+    if await _is_opted_out(cleaned_phone):
+        logger.info(f"SEND BLOCKED — {cleaned_phone} has opted out of WhatsApp messages")
+        return {"success": False, "error": "opted_out", "opted_out": True}
+    # ──────────────────────────────────────────────────────────────────────────
+
     # Fetch template record — needed both for language_code auto-detect and
     # for the Meta-approved / active gating below.
     template = await db.whatsapp_templates.find_one({"template_name": template_name}, {"_id": 0})
@@ -784,7 +790,23 @@ async def process_campaign_batch(campaign_id: str, template_name: str, batch_siz
         sent = 0
         failed = 0
         
+        skipped = 0
+
         for i, recipient in enumerate(recipients):
+            # ── Opt-out pre-check: skip without hitting the API ────────────────
+            recipient_phone = clean_phone_number(recipient["phone"])
+            if await _is_opted_out(recipient_phone):
+                logger.info(f"Campaign {campaign_id}: skipping opted-out {recipient_phone}")
+                await db.whatsapp_campaign_recipients.update_one(
+                    {"id": recipient["id"]},
+                    {"$set": {"status": "skipped_opted_out",
+                              "error": "User has opted out",
+                              "sent_at": datetime.now(timezone.utc).isoformat()}}
+                )
+                skipped += 1
+                continue
+            # ──────────────────────────────────────────────────────────────────
+
             # Only get variables if template needs them
             variables = None
             if variable_count > 0:
@@ -932,6 +954,7 @@ async def get_crm_inbox(filter: str = "replies", page: int = 1, limit: int = 50)
       - failed     : wa_failed=true          (template delivery failed)
       - follow_up  : wa_delivered=true AND wa_read != true  (delivered but not read)
       - bulk_sent  : templateSent=true       (all leads that received a template)
+      - opted_out  : wa_opted_out=true       (users who sent STOP)
     """
     skip = (page - 1) * limit
 
@@ -944,6 +967,9 @@ async def get_crm_inbox(filter: str = "replies", page: int = 1, limit: int = 50)
     elif filter == "follow_up":
         query = {"wa_delivered": True, "wa_read": {"$ne": True}}
         sort_field = "templateSentAt"
+    elif filter == "opted_out":
+        query = {"wa_opted_out": True}
+        sort_field = "wa_opted_out_at"
     else:  # bulk_sent
         query = {"templateSent": True}
         sort_field = "templateSentAt"
@@ -960,6 +986,56 @@ async def get_crm_inbox(filter: str = "replies", page: int = 1, limit: int = 50)
         "per_page": limit,
         "filter": filter,
     }
+
+
+@router.get("/optouts")
+async def list_optouts(page: int = 1, limit: int = 100):
+    """List all opted-out phone numbers from the wa_optouts collection."""
+    skip = (page - 1) * limit
+    records = await db.wa_optouts.find(
+        {"opted_out": True}, {"_id": 0}
+    ).sort("opted_out_at", -1).skip(skip).limit(limit).to_list(limit)
+    total = await db.wa_optouts.count_documents({"opted_out": True})
+    return {"optouts": records, "total": total}
+
+
+@router.post("/optouts/manual")
+async def manual_optout(data: Dict[str, Any]):
+    """
+    Manually opt-out or re-subscribe a phone number (admin action).
+    body: { phone: str, opted_out: bool }
+    """
+    phone_raw = (data.get("phone") or "").strip()
+    if not phone_raw:
+        raise HTTPException(status_code=400, detail="phone required")
+    opted_out: bool = bool(data.get("opted_out", True))
+    phone = clean_phone_number(phone_raw)
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    update_fields = {"phone": phone, "opted_out": opted_out}
+    if opted_out:
+        update_fields["opted_out_at"] = now_iso
+    else:
+        update_fields["opted_in_at"] = now_iso
+
+    await db.wa_optouts.update_one(
+        {"phone": phone}, {"$set": update_fields}, upsert=True
+    )
+
+    # Sync to CRM lead if exists
+    crm_update = {"wa_opted_out": opted_out}
+    if opted_out:
+        crm_update["wa_opted_out_at"] = now_iso
+    else:
+        crm_update["wa_opted_in_at"] = now_iso
+    await db.crm_leads.update_many(
+        {"$or": [{"phone": phone}, {"phone": phone_raw}]},
+        {"$set": crm_update}
+    )
+
+    action = "opted out" if opted_out else "re-subscribed"
+    logger.info(f"Manual {action}: {phone} by admin")
+    return {"success": True, "phone": phone, "opted_out": opted_out}
 
 # ==================== MESSAGE HISTORY ENDPOINTS ====================
 
@@ -1983,6 +2059,122 @@ async def webhook_receive(request: Request):
         # Still return 200 to prevent Meta from retrying
         return {"status": "error", "message": str(e)}
 
+# ==================== OPT-OUT / OPT-IN SYSTEM ====================
+
+_STOP_KEYWORDS  = {"stop", "unsubscribe", "opt out", "optout", "opt-out"}
+_START_KEYWORDS = {"start", "subscribe", "opt in", "optin", "opt-in"}
+
+async def _send_text_reply(phone: str, text: str) -> None:
+    """Send a plain-text WhatsApp reply — used only for opt-out/in confirmations."""
+    try:
+        settings = await get_whatsapp_settings()
+        if not settings or not settings.get("access_token"):
+            logger.warning("Cannot send opt-out reply — WhatsApp API not configured")
+            return
+        cleaned = clean_phone_number(phone, settings.get("default_country_code", "91"))
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": cleaned,
+            "type": "text",
+            "text": {"body": text}
+        }
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(
+                f"{WHATSAPP_API_BASE}/{settings['phone_number_id']}/messages",
+                headers={"Authorization": f"Bearer {settings['access_token']}", "Content-Type": "application/json"},
+                json=payload,
+            )
+            if resp.status_code not in (200, 201):
+                logger.warning(f"Opt-out reply failed for {phone}: {resp.text[:200]}")
+    except Exception as e:
+        logger.warning(f"Opt-out reply exception for {phone}: {e}")
+
+
+async def _handle_optout_keyword(
+    phone: str,
+    content: str,
+    lead: Optional[Dict],
+) -> bool:
+    """
+    Detect STOP / START keywords (case-insensitive).
+    Updates wa_optouts collection + crm_leads, sends auto-reply.
+    Returns True if the message was a keyword (caller should skip automation).
+    """
+    normalized = content.lower().strip()
+
+    if normalized in _STOP_KEYWORDS:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        logger.info(f"OPT-OUT: {phone} sent '{content}'")
+
+        # Upsert wa_optouts collection (phone-level, survives even without a lead)
+        await db.wa_optouts.update_one(
+            {"phone": phone},
+            {"$set": {"phone": phone, "opted_out": True, "opted_out_at": now_iso},
+             "$unset": {"opted_in_at": ""}},
+            upsert=True,
+        )
+
+        # Update CRM lead if exists
+        if lead:
+            await db.crm_leads.update_one(
+                {"id": lead["id"]},
+                {"$set": {
+                    "wa_opted_out": True,
+                    "wa_opted_out_at": now_iso,
+                    "wa_priority": "opted_out",
+                }}
+            )
+            logger.info(f"OPT-OUT: CRM lead {lead['id']} ({lead.get('name')}) marked opted-out")
+
+        # Send confirmation reply
+        await _send_text_reply(
+            phone,
+            "You have been successfully removed from ASR ENTERPRISES updates. "
+            "You will no longer receive messages from us. "
+            "Reply START to subscribe again."
+        )
+        return True
+
+    if normalized in _START_KEYWORDS:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        logger.info(f"OPT-IN: {phone} sent '{content}'")
+
+        # Upsert wa_optouts — mark opted back in
+        await db.wa_optouts.update_one(
+            {"phone": phone},
+            {"$set": {"phone": phone, "opted_out": False, "opted_in_at": now_iso},
+             "$unset": {"opted_out_at": ""}},
+            upsert=True,
+        )
+
+        # Update CRM lead if exists
+        if lead:
+            await db.crm_leads.update_one(
+                {"id": lead["id"]},
+                {"$set": {
+                    "wa_opted_out": False,
+                    "wa_opted_in_at": now_iso,
+                }}
+            )
+            logger.info(f"OPT-IN: CRM lead {lead['id']} ({lead.get('name')}) re-subscribed")
+
+        # Send confirmation reply
+        await _send_text_reply(
+            phone,
+            "You are successfully subscribed again to ASR ENTERPRISES updates. "
+            "You will now receive our solar energy offers and service updates."
+        )
+        return True
+
+    return False
+
+
+async def _is_opted_out(phone: str) -> bool:
+    """Quick lookup: has this phone number opted out of WhatsApp messages?"""
+    record = await db.wa_optouts.find_one({"phone": phone, "opted_out": True}, {"_id": 0})
+    return bool(record)
+
+
 async def process_incoming_message(message: Dict, value: Dict):
     """Process incoming WhatsApp message and trigger automation"""
     from routes.whatsapp_automation import (
@@ -2036,7 +2228,30 @@ async def process_incoming_message(message: Dict, value: Dict):
     )
     
     lead_id = lead.get("id") if lead else None
-    
+
+    # ── OPT-OUT / OPT-IN KEYWORD GATE ─────────────────────────────────────────
+    # Must run before automation. If it returns True the message was STOP/START,
+    # so we persist it for audit then exit — no automation, no chatbot reply.
+    if content:
+        is_keyword = await _handle_optout_keyword(cleaned_phone, content, lead)
+        if is_keyword:
+            # Still save the message for compliance audit
+            await db.whatsapp_messages.insert_one({
+                "id": str(uuid.uuid4()),
+                "lead_id": lead_id,
+                "phone": cleaned_phone,
+                "direction": "incoming",
+                "message_type": msg_type,
+                "content": content,
+                "wa_message_id": wa_message_id,
+                "status": "received",
+                "raw_message": message,
+                "opt_keyword": True,
+                "created_at": datetime.now(timezone.utc).isoformat()
+            })
+            return
+    # ──────────────────────────────────────────────────────────────────────────
+
     # Save incoming message
     message_id = str(uuid.uuid4())
     await db.whatsapp_messages.insert_one({
