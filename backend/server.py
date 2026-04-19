@@ -5501,40 +5501,44 @@ async def delete_crm_employee(employee_id: str):
 # CRM Lead Management with Pipeline
 @api_router.get("/crm/leads")
 async def get_crm_leads(
-    stage: Optional[str] = None, 
+    stage: Optional[str] = None,
     assigned_to: Optional[str] = None,
     page: int = 1,
     limit: int = 250,
     search: Optional[str] = None
 ):
     """
-    Get CRM leads with pagination.
+    Get CRM leads with pagination — always excludes soft-deleted leads.
     - page: Page number (1-indexed)
     - limit: Leads per page (default 250, max 500)
     - search: Search by name or phone
     """
-    query = {}
+    # ALWAYS exclude soft-deleted leads (is_deleted: True).
+    # This was the root cause of the "deleted leads still appearing" bug —
+    # the old query = {} had no filter and returned everything including
+    # leads that had been soft-deleted via DELETE /admin/leads/{id}.
+    must = [{"$or": [{"is_deleted": {"$exists": False}}, {"is_deleted": False}]}]
+
     if stage:
-        query["stage"] = stage
+        must.append({"stage": stage})
     if assigned_to:
-        query["assigned_to"] = assigned_to
+        must.append({"assigned_to": assigned_to})
     if search:
-        query["$or"] = [
+        must.append({"$or": [
             {"name": {"$regex": search, "$options": "i"}},
             {"phone": {"$regex": search}}
-        ]
-    
-    # Ensure limit doesn't exceed 500
+        ]})
+
+    query = {"$and": must} if len(must) > 1 else must[0]
+
     limit = min(limit, 500)
     skip = (page - 1) * limit
-    
-    # Get total count for pagination
+
     total_count = await db.crm_leads.count_documents(query)
-    total_pages = (total_count + limit - 1) // limit  # Ceiling division
-    
-    # Fetch leads with pagination
+    total_pages = (total_count + limit - 1) // limit
+
     leads = await db.crm_leads.find(query, {"_id": 0}).sort("timestamp", -1).skip(skip).limit(limit).to_list(limit)
-    
+
     return {
         "leads": leads,
         "pagination": {
@@ -11441,8 +11445,10 @@ async def admin_update_lead(lead_id: str, data: Dict[str, Any]):
 @api_router.delete("/admin/leads/{lead_id}")
 async def admin_delete_lead(lead_id: str):
     """Admin soft-delete lead - moves to Leads Bin (30-day retention, restorable)"""
-    from datetime import datetime, timezone
     try:
+        lead = await db.crm_leads.find_one({"id": lead_id, "$or": [{"is_deleted": {"$exists": False}}, {"is_deleted": False}]}, {"_id": 0, "id": 1})
+        if not lead:
+            raise HTTPException(status_code=404, detail="Lead not found")
         now = datetime.now(timezone.utc).isoformat()
         await db.crm_leads.update_one(
             {"id": lead_id},
@@ -11450,6 +11456,8 @@ async def admin_delete_lead(lead_id: str):
         )
         logger.info(f"Lead {lead_id} soft-deleted by admin (moved to Leads Bin)")
         return {"success": True, "message": "Lead moved to Leads Bin (restorable for 30 days)"}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error deleting lead: {e}")
         raise HTTPException(status_code=500, detail=str(e))
