@@ -2801,7 +2801,9 @@ async def update_lead_status(lead_id: str, data: Dict[str, Any]):
 
 @api_router.delete("/leads/{lead_id}")
 async def delete_lead(lead_id: str):
-    await db.leads.delete_one({"id": lead_id})
+    result = await db.leads.delete_one({"id": lead_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Lead not found")
     return {"success": True}
 
 # Work Photos Management
@@ -2846,7 +2848,9 @@ async def upload_photo(photo_data: Dict[str, Any]):
 
 @api_router.delete("/admin/photos/{photo_id}")
 async def delete_photo(photo_id: str):
-    await db.work_photos.delete_one({"id": photo_id})
+    result = await db.work_photos.delete_one({"id": photo_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Photo not found")
     return {"success": True}
 
 # Customer Reviews Management
@@ -2968,7 +2972,9 @@ Write ONLY the testimonial text, nothing else."""
 
 @api_router.delete("/admin/reviews/{review_id}")
 async def delete_review(review_id: str):
-    await db.customer_reviews.delete_one({"id": review_id})
+    result = await db.customer_reviews.delete_one({"id": review_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Review not found")
     return {"success": True}
 
 # Festival Posts Management
@@ -3008,7 +3014,9 @@ async def update_festival(festival_id: str, festival_data: Dict[str, Any]):
 
 @api_router.delete("/admin/festivals/{festival_id}")
 async def delete_festival(festival_id: str):
-    await db.festival_posts.delete_one({"id": festival_id})
+    result = await db.festival_posts.delete_one({"id": festival_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Festival not found")
     return {"success": True}
 
 # Government News - AI Auto-fetch
@@ -3087,7 +3095,9 @@ Return ONLY the JSON array, no other text.""")]
 
 @api_router.delete("/admin/govt-news/{news_id}")
 async def delete_govt_news(news_id: str):
-    await db.govt_news.delete_one({"id": news_id})
+    result = await db.govt_news.delete_one({"id": news_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="News item not found")
     return {"success": True}
 
 @api_router.post("/chat/whatsapp")
@@ -4114,9 +4124,13 @@ async def delete_staff(staff_id: str):
     if staff_id == OWNER_STAFF_ID:
         raise HTTPException(status_code=403, detail=f"Cannot delete owner account. {OWNER_NAME} ({OWNER_STAFF_ID}) has permanent protected access.")
     staff = await db.staff.find_one({"id": staff_id}, {"_id": 0})
-    if staff and is_owner_account(staff):
+    if not staff:
+        raise HTTPException(status_code=404, detail="Staff member not found")
+    if is_owner_account(staff):
         raise HTTPException(status_code=403, detail="Cannot delete owner account")
-    await db.staff.delete_one({"id": staff_id})
+    result = await db.staff.delete_one({"id": staff_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Staff member not found")
     return {"success": True}
 
 @api_router.post("/admin/staff/{staff_id}/task")
@@ -7644,7 +7658,9 @@ async def update_product(product_id: str, data: Dict[str, Any]):
 @api_router.delete("/shop/products/{product_id}")
 async def delete_product(product_id: str):
     """Delete a product (CRM)"""
-    await db.products.delete_one({"id": product_id})
+    result = await db.products.delete_one({"id": product_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Product not found")
     return {"status": "success", "message": "Product deleted"}
 
 @api_router.post("/shop/products/{product_id}/images")
@@ -12108,7 +12124,9 @@ async def bulk_sync_google_reviews(data: Dict[str, Any]):
 async def delete_google_review(review_id: str):
     """Delete a Google review"""
     result = await db.google_reviews.delete_one({"id": review_id})
-    return {"success": result.deleted_count > 0}
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Google review not found")
+    return {"success": True}
 
 @api_router.put("/admin/google-reviews/{review_id}/toggle")
 async def toggle_google_review_visibility(review_id: str):
