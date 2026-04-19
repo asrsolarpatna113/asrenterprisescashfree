@@ -11789,6 +11789,8 @@ class AdvisorOnboardCustomer(BaseModel):
     address: str
     district: str
     pincode: Optional[str] = ""
+    ca_no: Optional[str] = ""                  # Electricity bill CA / Consumer number
+    electricity_provider: Optional[str] = ""   # SBPDCL | NBPDCL
     required_capacity_kw: Optional[float] = None
     customer_type: str = "residential"  # residential | commercial
     monthly_bill: Optional[float] = None
@@ -11816,6 +11818,8 @@ async def advisor_onboard_customer(agent_id: str, data: AdvisorOnboardCustomer, 
         "address": data.address,
         "district": data.district,
         "pincode": data.pincode or "",
+        "ca_no": (data.ca_no or "").strip(),
+        "electricity_provider": (data.electricity_provider or "").strip(),
         "property_type": data.customer_type,
         "customer_type": data.customer_type,
         "required_capacity_kw": data.required_capacity_kw,
