@@ -613,6 +613,24 @@ app.add_middleware(GZipMiddleware, minimum_size=500)  # Compression
 app.add_middleware(CacheHeadersMiddleware)  # Cache headers
 app.add_middleware(SecurityMiddleware)  # Existing security
 
+# WWW redirect: ensure canonical domain is www.asrenterprises.in.
+# Added LAST so it runs FIRST for all incoming requests.
+class WwwRedirectMiddleware(BaseHTTPMiddleware):
+    """301-redirect bare domain → www for SEO canonical consistency."""
+    _NON_WWW_HOSTS = {"asrenterprises.in", "asrenterprises.in:80", "asrenterprises.in:443"}
+
+    async def dispatch(self, request: Request, call_next):
+        from fastapi.responses import RedirectResponse as _Redirect
+        host = request.headers.get("host", "").lower().split(":")[0]
+        if host == "asrenterprises.in":
+            target = f"https://www.asrenterprises.in{request.url.path}"
+            if request.url.query:
+                target += f"?{request.url.query}"
+            return _Redirect(url=target, status_code=301)
+        return await call_next(request)
+
+app.add_middleware(WwwRedirectMiddleware)
+
 # Startup event to create indexes and start background tasks
 @app.on_event("startup")
 async def startup_event():
@@ -12880,23 +12898,189 @@ _STATIC_ASSET_DIR = FRONTEND_BUILD_DIR / "static"
 if _STATIC_ASSET_DIR.exists():
     app.mount("/static", StaticFiles(directory=_STATIC_ASSET_DIR), name="static_assets")
 
-# SPA catch-all: serve index.html for ALL non-API routes so that
-# refreshing any React Router page works correctly in production.
+# ==================== DYNAMIC OG META INJECTION ====================
+_OG_BASE_URL = "https://www.asrenterprises.in"
+_OG_DEFAULT_IMAGE = f"{_OG_BASE_URL}/og-homepage.jpg?v=2"
+_OG_PRODUCT_CACHE: dict = {}  # simple TTL-less in-memory cache for product OG data
+
+def _esc(s: str) -> str:
+    """Escape HTML attribute characters."""
+    return (s or "").replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;").replace(">", "&gt;")
+
+def _build_og_block(title: str, description: str, image: str, canonical: str) -> str:
+    """Return the HTML snippet that replaces the DYNAMIC_OG markers."""
+    t, d, i, u = _esc(title), _esc(description), image, canonical
+    return f"""<!-- DYNAMIC_OG_START -->
+        <!-- Primary Meta Tags -->
+        <title>{t}</title>
+        <meta name="title" content="{t}" />
+        <meta name="description" content="{d}" />
+        <meta name="author" content="ASR Enterprises" />
+        <meta name="robots" content="index, follow" />
+
+        <!-- Canonical URL -->
+        <link rel="canonical" href="{u}" />
+
+        <!-- Open Graph / Facebook -->
+        <meta property="og:type" content="website" />
+        <meta property="og:url" content="{u}" />
+        <meta property="og:title" content="{t}" />
+        <meta property="og:description" content="{d}" />
+        <meta property="og:image" content="{i}" />
+        <meta property="og:image:secure_url" content="{i}" />
+        <meta property="og:image:type" content="image/jpeg" />
+        <meta property="og:image:width" content="1200" />
+        <meta property="og:image:height" content="630" />
+        <meta property="og:image:alt" content="{t}" />
+        <meta property="og:site_name" content="ASR Enterprises" />
+        <meta property="og:locale" content="en_IN" />
+
+        <!-- Twitter Card -->
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:url" content="{u}" />
+        <meta name="twitter:title" content="{t}" />
+        <meta name="twitter:description" content="{d}" />
+        <meta name="twitter:image" content="{i}" />
+        <meta name="twitter:image:alt" content="{t}" />
+        <!-- DYNAMIC_OG_END -->"""
+
+async def _resolve_og(path: str):
+    """Return (title, description, image, canonical) for a given URL path."""
+    path = "/" + path.strip("/")
+
+    # Home
+    if path in ("/", ""):
+        return (
+            "ASR Enterprises | Solar Solutions Patna, Bihar",
+            "Get solar installation with subsidy in Bihar. Trusted rooftop solar company — PM Surya Ghar Yojana support, net metering, free site survey.",
+            _OG_DEFAULT_IMAGE,
+            _OG_BASE_URL + "/",
+        )
+
+    # Advisor page
+    if path.rstrip("/") == "/advisor":
+        return (
+            "Become Solar Advisor - ASR Enterprises",
+            "Join ASR Enterprises & earn with solar business. High commission, flexible work. Serving Bihar.",
+            _OG_DEFAULT_IMAGE,
+            _OG_BASE_URL + "/advisor",
+        )
+
+    # Gallery / Our Work
+    if path.rstrip("/") == "/gallery":
+        return (
+            "Our Solar Installation Work - ASR Enterprises",
+            "See our latest solar installation projects across Bihar. 25+ happy customers, 100kW+ total capacity.",
+            _OG_DEFAULT_IMAGE,
+            _OG_BASE_URL + "/gallery",
+        )
+
+    # Contact
+    if path.rstrip("/") == "/contact":
+        return (
+            "Contact ASR Enterprises - Solar Company Patna Bihar",
+            "Contact ASR Enterprises for solar installation, subsidy assistance and free site survey. Call 9296389097.",
+            _OG_DEFAULT_IMAGE,
+            _OG_BASE_URL + "/contact",
+        )
+
+    # Shop
+    if path.rstrip("/") == "/shop":
+        return (
+            "Solar Shop - ASR Enterprises",
+            "Buy solar panels, inverters, batteries and accessories online. Quality products, doorstep delivery in Bihar.",
+            _OG_DEFAULT_IMAGE,
+            _OG_BASE_URL + "/shop",
+        )
+
+    # Product detail page: /product/:id
+    product_match = re.match(r"^/product/([^/?#]+)$", path)
+    if product_match:
+        product_id = product_match.group(1)
+        try:
+            product = _OG_PRODUCT_CACHE.get(product_id)
+            if not product:
+                product = await db.shop_products.find_one(
+                    {"id": product_id},
+                    {"_id": 0, "name": 1, "description": 1, "short_description": 1, "images": 1, "brand": 1}
+                )
+                if product:
+                    _OG_PRODUCT_CACHE[product_id] = product
+            if product:
+                name = product.get("name", "Solar Product")
+                desc = product.get("short_description") or product.get("description", "")
+                desc = (desc[:200] + "…") if len(desc) > 200 else desc
+                imgs = product.get("images", [])
+                img = next((u for u in imgs if isinstance(u, str) and u.startswith("http")), _OG_DEFAULT_IMAGE)
+                brand = product.get("brand", "")
+                title = f"{name}{' - ' + brand if brand else ''} | ASR Enterprises"
+                return (title, desc or f"Buy {name} from ASR Enterprises. Quality solar products in Bihar.", img, f"{_OG_BASE_URL}/product/{product_id}")
+        except Exception as _e:
+            logger.warning(f"OG product fetch failed for {product_id}: {_e}")
+
+    # Default fallback for any other page
+    return (
+        "ASR Enterprises | Rooftop Solar Solutions in Patna, Bihar",
+        "Trusted rooftop solar company in Patna, Bihar. Solar installation, PM Surya Ghar subsidy, net metering.",
+        _OG_DEFAULT_IMAGE,
+        _OG_BASE_URL + path,
+    )
+
+# SPA catch-all: serve index.html with dynamic OG meta injection for bots/crawlers.
+# All API routes are registered before this so they take priority.
 @app.get("/{full_path:path}", include_in_schema=False)
-async def serve_spa(full_path: str):
-    """Serve the React SPA for all client-side routes (SPA routing support)."""
-    from fastapi.responses import FileResponse as _FileResponse
-    # Let API and health routes fall through (they are registered before this)
+async def serve_spa(full_path: str, request: Request):
+    """Serve the React SPA with route-specific OG meta tags for social sharing."""
+    from fastapi.responses import FileResponse as _FileResponse, HTMLResponse as _HTMLResponse
+
     index_file = FRONTEND_BUILD_DIR / "index.html"
     if not index_file.exists():
         from fastapi.responses import JSONResponse as _JSONResponse
         return _JSONResponse({"detail": "Frontend not built yet"}, status_code=404)
-    # If the path maps to an actual file in the build dir, serve it directly
+
+    # Static files in the build directory are served directly
     candidate = FRONTEND_BUILD_DIR / full_path
     if candidate.is_file():
         return _FileResponse(str(candidate))
-    # Otherwise serve index.html so React Router can handle the path
-    return _FileResponse(str(index_file))
+
+    # Determine if this path needs dynamic OG injection.
+    # We inject for known page routes; fall through to plain FileResponse for anything else.
+    path = "/" + full_path.strip("/")
+    needs_og = (
+        path in ("/", "")
+        or path.rstrip("/") in ("/advisor", "/gallery", "/contact", "/shop", "/about")
+        or bool(re.match(r"^/product/[^/?#]+$", path))
+    )
+
+    if not needs_og:
+        # Unknown/other routes: serve index.html as-is (React Router handles it)
+        return _FileResponse(str(index_file))
+
+    # Resolve OG meta for this route and inject into HTML
+    try:
+        title, description, image, canonical = await _resolve_og(path)
+        og_block = _build_og_block(title, description, image, canonical)
+        html = index_file.read_text(encoding="utf-8")
+
+        if "<!-- DYNAMIC_OG_START -->" in html:
+            # Built index.html has the placeholder markers — replace the block cleanly
+            html = re.sub(
+                r"<!-- DYNAMIC_OG_START -->.*?<!-- DYNAMIC_OG_END -->",
+                og_block,
+                html,
+                flags=re.DOTALL,
+            )
+        else:
+            # Older build without markers: inject OG meta right after <head>.
+            # For social crawlers the FIRST occurrence wins, so prepending is correct.
+            inject = og_block.replace("<!-- DYNAMIC_OG_START -->", "").replace("<!-- DYNAMIC_OG_END -->", "").strip()
+            html = html.replace("<head>", f"<head>\n{inject}", 1)
+
+        logger.debug(f"OG inject: path={path} title={title!r}")
+        return _HTMLResponse(content=html, status_code=200, headers={"Cache-Control": "no-cache"})
+    except Exception as _e:
+        logger.error(f"OG injection failed for {path}: {_e}")
+        return _FileResponse(str(index_file))
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
