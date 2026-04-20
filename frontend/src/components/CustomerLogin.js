@@ -108,21 +108,18 @@ export const CustomerLogin = () => {
 
       <div className="flex-1 flex items-center justify-center px-4 py-12 relative">
         <div className="w-full max-w-md">
+          <a href="/login" className="inline-flex items-center gap-1.5 text-slate-500 hover:text-[#073B4C] text-sm mb-5 transition">
+            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+            Back to Login
+          </a>
           <div className="text-center mb-8">
-            <a href="/login" className="inline-flex items-center gap-1.5 text-slate-400 hover:text-[#073B4C] text-sm mb-4 transition">
-              <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
-              Back to Login
-            </a>
-            <Link to="/" className="inline-flex items-center gap-3 mb-6">
+            <Link to="/" className="inline-flex items-center gap-3 mb-6 justify-center">
               <img src="/asr_logo_transparent.png" alt="ASR Enterprises" className="h-14 w-auto" />
               <div className="text-left">
                 <div className="font-extrabold text-xl text-[#073B4C]">ASR Enterprises</div>
                 <div className="text-xs text-[#0369A1]">Customer Portal</div>
               </div>
             </Link>
-            <div className="w-16 h-16 bg-gradient-to-br from-[#F6A600] to-[#FBBF24] rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg">
-              <Sun className="w-9 h-9 text-white" />
-            </div>
             <h1 className="text-2xl font-bold text-[#073B4C] mb-1">Customer Login</h1>
             <p className="text-slate-500 text-sm">Access your solar installation dashboard</p>
           </div>

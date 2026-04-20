@@ -76,12 +76,28 @@ export const AdminDashboard = ({ onLogout }) => {
       count: "Full CRM"
     },
     {
+      title: "WhatsApp API",
+      description: "WhatsApp messaging & templates",
+      icon: <MessageCircle className="w-10 h-10" />,
+      link: "/admin/whatsapp-crm",
+      color: "from-green-600 to-emerald-700",
+      count: "Messaging"
+    },
+    {
       title: "Leads Management",
       description: "View and manage all customer inquiries",
       icon: <ClipboardList className="w-10 h-10" />,
       link: "/admin/leads",
       color: "from-green-500 to-emerald-600",
       count: `${counts?.total_leads || 0} Leads`
+    },
+    {
+      title: "HR Management",
+      description: "Employees, attendance & payroll",
+      icon: <UserCog className="w-10 h-10" />,
+      link: "/admin/hr",
+      color: "from-orange-500 to-red-500",
+      count: "Staff Portal"
     },
     {
       title: "Shop Management",
@@ -100,12 +116,12 @@ export const AdminDashboard = ({ onLogout }) => {
       count: "Customers"
     },
     {
-      title: "HR Management",
-      description: "Employees, attendance & payroll",
-      icon: <UserCog className="w-10 h-10" />,
-      link: "/admin/hr",
-      color: "from-orange-500 to-red-500",
-      count: "Staff Portal"
+      title: "Solar Advisor",
+      description: "Manage advisors, leads & commission payouts",
+      icon: <Users className="w-10 h-10" />,
+      link: "/admin/solar-advisors",
+      color: "from-purple-600 to-pink-600",
+      count: "Network"
     },
     {
       title: "Social Media",
@@ -132,23 +148,7 @@ export const AdminDashboard = ({ onLogout }) => {
       count: "Post Wishes"
     },
     {
-      title: "WhatsApp API",
-      description: "WhatsApp messaging & templates",
-      icon: <MessageCircle className="w-10 h-10" />,
-      link: "/admin/whatsapp-crm",
-      color: "from-green-600 to-emerald-700",
-      count: "Messaging"
-    },
-    {
-      title: "Solar Advisors",
-      description: "Manage advisors, leads & commission payouts",
-      icon: <Users className="w-10 h-10" />,
-      link: "/admin/solar-advisors",
-      color: "from-purple-600 to-pink-600",
-      count: "Network"
-    },
-    {
-      title: "Security Center",
+      title: "Security Centre",
       description: "Monitor website security & performance",
       icon: <Shield className="w-10 h-10" />,
       link: "/admin/security",
@@ -193,7 +193,7 @@ export const AdminDashboard = ({ onLogout }) => {
     "Testimonials",
     "Festival Posts",
     "WhatsApp API",
-    "Solar Advisors"
+    "Solar Advisor"
   ];
 
   const visibleModules = isAdminManager

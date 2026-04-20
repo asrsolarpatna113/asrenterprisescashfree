@@ -98,9 +98,13 @@ export const SolarAdvisorLogin = () => {
         </Link>
         <div className="bg-white rounded-2xl shadow-2xl p-8">
           <div className="text-center mb-6">
-            <div className="w-16 h-16 bg-gradient-to-br from-purple-600 to-pink-600 rounded-2xl flex items-center justify-center mx-auto mb-3">
-              <Sun className="w-9 h-9 text-white" />
-            </div>
+            <Link to="/" className="inline-flex items-center gap-3 mb-4 justify-center">
+              <img src="/asr_logo_transparent.png" alt="ASR Enterprises" className="h-12 w-auto" />
+              <div className="text-left">
+                <div className="font-extrabold text-lg text-gray-800">ASR Enterprises</div>
+                <div className="text-xs text-purple-600">Solar Advisor Portal</div>
+              </div>
+            </Link>
             <h1 className="text-2xl font-bold text-gray-800">Solar Advisor Login</h1>
             <p className="text-gray-500 text-sm mt-1">Access your earnings & customers</p>
           </div>
