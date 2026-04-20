@@ -317,10 +317,32 @@ Thank you!`)}`;
   );
 };
 
-// Protected Route Component
+// Protected Route Component — Admin/Super-Admin only
 const ProtectedRoute = ({ children }) => {
   const isAuthenticated = localStorage.getItem("asrAdminAuth") === "true";
   return isAuthenticated ? children : <Navigate to="/admin/login" replace />;
+};
+
+// Staff Portal Route Guard — authenticated staff only (not admin/super_admin)
+const StaffRoute = ({ children }) => {
+  const isStaffAuth = localStorage.getItem("asrStaffAuth") === "true";
+  if (!isStaffAuth) return <Navigate to="/staff/login" replace />;
+  // If somehow an admin/super_admin ended up here, push them to admin dashboard
+  try {
+    const staffData = JSON.parse(localStorage.getItem("asrStaffData") || "{}");
+    const role = (staffData.role || localStorage.getItem("asrStaffRole") || "").toLowerCase();
+    const dept = (staffData.department || "").toLowerCase();
+    if (role === "super_admin" || role === "admin" || (role === "manager" && dept === "admin")) {
+      return <Navigate to="/admin/dashboard" replace />;
+    }
+  } catch (_) {}
+  return children;
+};
+
+// Customer Portal Route Guard — authenticated customers only
+const CustomerRoute = ({ children }) => {
+  const isCustomerAuth = localStorage.getItem("asrCustomerAuth") === "true";
+  return isCustomerAuth ? children : <Navigate to="/customer/login" replace />;
 };
 
 // Solar Inquiry Form Component with MSG91 OTP Verification
@@ -2805,7 +2827,7 @@ export default function App() {
 
           {/* Staff Portal Routes */}
           <Route path="/staff/login" element={<StaffLogin />} />
-          <Route path="/staff/portal" element={<StaffPortal />} />
+          <Route path="/staff/portal" element={<StaffRoute><StaffPortal /></StaffRoute>} />
 
           {/* Protected Admin Routes */}
           <Route path="/admin/dashboard" element={

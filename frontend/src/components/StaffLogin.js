@@ -9,6 +9,56 @@ const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 const MSG91_WIDGET_ID = process.env.REACT_APP_MSG91_WIDGET_ID || "";
 const MSG91_AUTH_TOKEN = process.env.REACT_APP_MSG91_TOKEN_AUTH || "";
 
+/**
+ * Central role-based routing helper.
+ * Every login success path must call this instead of hard-coding navigate().
+ * Rules:
+ *   super_admin / admin / manager+admin-dept  →  Admin Dashboard
+ *   solar_advisor                             →  BLOCKED (wrong portal)
+ *   customer                                  →  BLOCKED (wrong portal)
+ *   staff / manager (other dept)              →  Staff Portal
+ *
+ * @param {object}   staffData  - the staff document returned by the API
+ * @param {string}   token      - session token (may be "" for OTP-less paths)
+ * @param {function} navigate   - React Router navigate()
+ * @param {function} setError   - state setter for error messages
+ * @returns {boolean}           - true if navigation was dispatched, false if blocked
+ */
+function routeByRole(staffData, token, navigate, setError) {
+  const role = (staffData?.role || "").toLowerCase();
+  const dept = (staffData?.department || "").toLowerCase();
+
+  // Block wrong portals immediately
+  if (role === "solar_advisor") {
+    setError("This account is registered as a Solar Advisor. Please log in at the Solar Advisor portal.");
+    return false;
+  }
+  if (role === "customer") {
+    setError("This account is registered as a Customer. Please use the Customer Login.");
+    return false;
+  }
+
+  const isAdmin = role === "super_admin" || role === "admin" || (role === "manager" && dept === "admin");
+
+  if (isAdmin) {
+    localStorage.setItem("asrAdminAuth", "true");
+    localStorage.setItem("asrAdminEmail", staffData.email || "");
+    localStorage.setItem("asrAdminRole", role);
+    localStorage.setItem("asrAdminName", staffData.name || "");
+    localStorage.setItem("asrAdminDepartment", dept);
+    localStorage.setItem("asrAdminStaffId", staffData.staff_id || "");
+    localStorage.setItem("asrAdminLastActivity", Date.now().toString());
+    navigate("/admin/dashboard");
+  } else {
+    localStorage.setItem("asrStaffAuth", "true");
+    localStorage.setItem("asrStaffData", JSON.stringify(staffData));
+    if (token) localStorage.setItem("asrStaffToken", token);
+    localStorage.setItem("asrStaffRole", role);
+    navigate("/staff/portal");
+  }
+  return true;
+}
+
 export const StaffLogin = () => {
   const [staffId, setStaffId] = useState("");
   const [password, setPassword] = useState("");
@@ -168,41 +218,15 @@ export const StaffLogin = () => {
       });
       
       if (res.data.success) {
-        localStorage.setItem("asrStaffAuth", "true");
-        localStorage.setItem("asrStaffData", JSON.stringify({
+        const staffData = {
           name: res.data.name,
           email: res.data.email,
           role: res.data.role,
           staff_id: res.data.staff_id,
           department: res.data.department || ""
-        }));
-
-        const role = (res.data.role || "").toLowerCase();
-        const dept = (res.data.department || "").toLowerCase();
-        // Owner/admin OR an Admin-department Manager (e.g. Anamika ASR1002)
-        // both go to the Admin Dashboard. The dashboard itself filters
-        // visible modules for managers.
-        const goToAdminDashboard = role === "admin" || (role === "manager" && dept === "admin");
-
-        if (goToAdminDashboard) {
-          localStorage.setItem("asrAdminAuth", "true");
-          localStorage.setItem("asrAdminEmail", res.data.email || cleanMobile);
-          localStorage.setItem("asrAdminRole", role);
-          localStorage.setItem("asrAdminName", res.data.name || "");
-          localStorage.setItem("asrAdminDepartment", dept);
-          localStorage.setItem("asrAdminStaffId", res.data.staff_id || "");
-          localStorage.setItem("asrAdminLastActivity", Date.now().toString());
-        }
-
+        };
         setSuccess("Login successful! Redirecting...");
-
-        setTimeout(() => {
-          if (goToAdminDashboard) {
-            navigate("/admin/dashboard");
-          } else {
-            navigate("/staff/portal");
-          }
-        }, 1000);
+        setTimeout(() => routeByRole(staffData, "", navigate, setError), 1000);
       } else {
         setError(res.data.message || "Mobile number not registered. Contact admin.");
       }
@@ -292,10 +316,7 @@ export const StaffLogin = () => {
         }
       } else if (res.data.success) {
         // Direct login (shouldn't happen with 2FA, but fallback)
-        localStorage.setItem("asrStaffAuth", "true");
-        localStorage.setItem("asrStaffData", JSON.stringify(res.data.staff));
-        localStorage.setItem("asrStaffToken", res.data.token);
-        navigate("/staff/portal");
+        routeByRole(res.data.staff || {}, res.data.token || "", navigate, setError);
       }
     } catch (err) {
       setError(err.response?.data?.detail || "Email not found. Please use your registered email address.");
@@ -386,13 +407,8 @@ export const StaffLogin = () => {
       });
       
       if (res.data.success) {
-        localStorage.setItem("asrStaffAuth", "true");
-        localStorage.setItem("asrStaffData", JSON.stringify(res.data.staff));
-        localStorage.setItem("asrStaffToken", res.data.token || "");
         setSuccess("Login successful! Redirecting...");
-        setTimeout(() => {
-          navigate("/staff/portal");
-        }, 1000);
+        setTimeout(() => routeByRole(res.data.staff || {}, res.data.token || "", navigate, setError), 1000);
       } else {
         setError(res.data.message || "2FA verification failed");
       }
@@ -443,10 +459,7 @@ export const StaffLogin = () => {
         }
       } else if (res.data.success) {
         // Direct login (backwards compatibility)
-        localStorage.setItem("asrStaffAuth", "true");
-        localStorage.setItem("asrStaffData", JSON.stringify(res.data.staff));
-        localStorage.setItem("asrStaffToken", res.data.token);
-        navigate("/staff/portal");
+        routeByRole(res.data.staff || {}, res.data.token || "", navigate, setError);
       }
     } catch (err) {
       setError(err.response?.data?.detail || "Invalid Staff ID or Password");
@@ -533,13 +546,8 @@ export const StaffLogin = () => {
       });
       
       if (res.data.success) {
-        localStorage.setItem("asrStaffAuth", "true");
-        localStorage.setItem("asrStaffData", JSON.stringify(res.data.staff));
-        localStorage.setItem("asrStaffToken", res.data.token || "");
         setSuccess("Login successful! Redirecting...");
-        setTimeout(() => {
-          navigate("/staff/portal");
-        }, 1000);
+        setTimeout(() => routeByRole(res.data.staff || {}, res.data.token || "", navigate, setError), 1000);
       } else {
         setError(res.data.message || "2FA verification failed");
       }
@@ -572,28 +580,7 @@ export const StaffLogin = () => {
       });
 
       if (res.data.success) {
-        const staff = res.data.staff || {};
-        const role = (staff.role || "").toLowerCase();
-        const dept = (staff.department || "").toLowerCase();
-        const isAdmin = role === "admin";
-        const isAdminManager = role === "manager" && dept === "admin";
-
-        if (isAdmin || isAdminManager) {
-          // Admin (owner) and admin-department managers go to the Admin Dashboard
-          localStorage.setItem("asrAdminAuth", "true");
-          localStorage.setItem("asrAdminEmail", staff.email || "");
-          localStorage.setItem("asrAdminRole", role);
-          localStorage.setItem("asrAdminName", staff.name || "");
-          localStorage.setItem("asrAdminDepartment", dept);
-          localStorage.setItem("asrAdminStaffId", staff.staff_id || "");
-          localStorage.setItem("asrAdminLastActivity", Date.now().toString());
-          navigate("/admin/dashboard");
-        } else {
-          localStorage.setItem("asrStaffAuth", "true");
-          localStorage.setItem("asrStaffData", JSON.stringify(staff));
-          localStorage.setItem("asrStaffToken", res.data.token);
-          navigate("/staff/portal");
-        }
+        routeByRole(res.data.staff || {}, res.data.token || "", navigate, setError);
       }
     } catch (err) {
       setError(err.response?.data?.detail || "Invalid email or password");
@@ -615,10 +602,7 @@ export const StaffLogin = () => {
       });
 
       if (res.data.success) {
-        localStorage.setItem("asrStaffAuth", "true");
-        localStorage.setItem("asrStaffData", JSON.stringify(res.data.staff));
-        localStorage.setItem("asrStaffToken", res.data.token);
-        navigate("/staff/portal");
+        routeByRole(res.data.staff || {}, res.data.token || "", navigate, setError);
       }
     } catch (err) {
       setError(err.response?.data?.detail || "Invalid or expired OTP");
@@ -664,10 +648,7 @@ export const StaffLogin = () => {
       });
 
       if (res.data.success) {
-        localStorage.setItem("asrStaffAuth", "true");
-        localStorage.setItem("asrStaffData", JSON.stringify(res.data.staff));
-        localStorage.setItem("asrStaffToken", res.data.token);
-        navigate("/staff/portal");
+        routeByRole(res.data.staff || {}, res.data.token || "", navigate, setError);
       }
     } catch (err) {
       setError(err.response?.data?.detail || "Invalid or expired OTP");
