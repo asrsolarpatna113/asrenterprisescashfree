@@ -59,8 +59,11 @@ export const AdminLogin = ({ onLogin }) => {
       if (response.data.success) {
         setOtpSent(true);
         setResendTimer(60);
+        const channel = response.data.channel || "";
         const method = response.data.method || "";
-        if (method === "email_fallback") {
+        if (channel === "whatsapp") {
+          setSuccess("OTP sent to your WhatsApp! Open WhatsApp and enter the code.");
+        } else if (method === "email_fallback") {
           setSuccess("OTP sent to your registered email (SMS unavailable). Check your inbox.");
         } else {
           setSuccess("OTP sent to your mobile! Check your SMS inbox.");
@@ -305,8 +308,11 @@ export const AdminLogin = ({ onLogin }) => {
       if (response.data.success) {
         setOtpSent(true);
         setResendTimer(30);
+        const channel2fa = response.data.channel || "";
         const method2fa = response.data.method || "";
-        if (method2fa === "email_fallback") {
+        if (channel2fa === "whatsapp") {
+          setSuccess("OTP sent to your WhatsApp! Open WhatsApp and enter the code.");
+        } else if (method2fa === "email_fallback") {
           setSuccess("OTP sent to your registered email (SMS unavailable). Check your inbox.");
         } else {
           setSuccess("OTP sent successfully! Check your phone.");
@@ -692,7 +698,7 @@ export const AdminLogin = ({ onLogin }) => {
                   Mobile OTP Login
                 </h2>
                 <p className="text-gray-500 text-sm">
-                  {otpSent ? "Enter the OTP sent to your mobile" : "Enter your registered mobile number"}
+                  {otpSent ? "Enter the OTP sent to your WhatsApp / mobile" : "Enter your registered mobile number"}
                 </p>
               </div>
 
@@ -720,7 +726,7 @@ export const AdminLogin = ({ onLogin }) => {
                       />
                     </div>
                     <p className="text-gray-500 text-xs mt-2">
-                      OTP will be sent to your registered mobile number
+                      OTP will be sent via WhatsApp (or SMS if WhatsApp unavailable)
                     </p>
                   </div>
 
@@ -749,8 +755,8 @@ export const AdminLogin = ({ onLogin }) => {
               {/* Step 2: OTP Input */}
               {otpSent && (
                 <>
-                  <div className="bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded-xl text-sm mb-2">
-                    <p>OTP sent to <strong>+91 {mobileNumber}</strong></p>
+                  <div className="bg-green-50 border border-green-200 text-green-800 px-4 py-3 rounded-xl text-sm mb-2">
+                    <p>OTP sent to <strong>+91 {mobileNumber}</strong> via WhatsApp / SMS</p>
                   </div>
 
                   <div>

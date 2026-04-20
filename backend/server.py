@@ -7005,14 +7005,130 @@ _Please contact the customer within 24 hours to schedule the service!_"""
     }
 
 # =============================================
-# MSG91 OTP - BACKEND API (RELIABLE)
+# WHATSAPP OTP - PRIMARY METHOD (No DLT needed)
+# =============================================
+
+# WhatsApp OTP config — uses the existing Cloud API credentials
+_WA_OTP_ACCESS_TOKEN = os.environ.get("WHATSAPP_ACCESS_TOKEN", "")
+_WA_OTP_PHONE_NUMBER_ID = os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "")
+# Optional: set to an approved WhatsApp authentication template name (e.g. "asr_otp")
+# If not set, the system sends a plain text WhatsApp message (works for existing contacts)
+WHATSAPP_OTP_TEMPLATE_NAME = os.environ.get("WHATSAPP_OTP_TEMPLATE_NAME", "")
+_WA_GRAPH_VERSION = "v23.0"
+
+
+async def _send_whatsapp_otp(mobile_with_country: str, otp_code: str) -> dict:
+    """Send OTP via WhatsApp Cloud API.
+
+    Strategy (in order):
+    1. If WHATSAPP_OTP_TEMPLATE_NAME is set → send as authentication template
+    2. Fallback → send as plain text message (works within 24-hour contact window)
+
+    Returns dict with keys: sent (bool), method (str), error (str or None)
+    """
+    if not _WA_OTP_ACCESS_TOKEN or not _WA_OTP_PHONE_NUMBER_ID:
+        return {"sent": False, "method": None, "error": "WhatsApp credentials not configured"}
+
+    api_url = f"https://graph.facebook.com/{_WA_GRAPH_VERSION}/{_WA_OTP_PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {_WA_OTP_ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        # ── Method 1: Authentication template (works for any WhatsApp user) ─────
+        if WHATSAPP_OTP_TEMPLATE_NAME:
+            payload = {
+                "messaging_product": "whatsapp",
+                "to": mobile_with_country,
+                "type": "template",
+                "template": {
+                    "name": WHATSAPP_OTP_TEMPLATE_NAME,
+                    "language": {"code": "en"},
+                    "components": [
+                        {
+                            "type": "body",
+                            "parameters": [{"type": "text", "text": otp_code}],
+                        },
+                        # button component for authentication templates (copy-code button)
+                        {
+                            "type": "button",
+                            "sub_type": "url",
+                            "index": "0",
+                            "parameters": [{"type": "text", "text": otp_code}],
+                        },
+                    ],
+                },
+            }
+            try:
+                resp = await client.post(api_url, json=payload, headers=headers)
+                resp_data = resp.json()
+                logger.info(f"[WA-OTP] Template send: {resp.status_code} - {str(resp_data)[:200]}")
+                if resp.status_code == 200 and resp_data.get("messages"):
+                    return {"sent": True, "method": "whatsapp_template", "error": None}
+                # If template has no button component (non-auth template), retry without button
+                error_code = resp_data.get("error", {}).get("code", 0)
+                if error_code in (132000, 132001, 132015):
+                    # Template component mismatch — try without button
+                    payload_simple = {
+                        "messaging_product": "whatsapp",
+                        "to": mobile_with_country,
+                        "type": "template",
+                        "template": {
+                            "name": WHATSAPP_OTP_TEMPLATE_NAME,
+                            "language": {"code": "en"},
+                            "components": [
+                                {
+                                    "type": "body",
+                                    "parameters": [{"type": "text", "text": otp_code}],
+                                }
+                            ],
+                        },
+                    }
+                    resp2 = await client.post(api_url, json=payload_simple, headers=headers)
+                    resp2_data = resp2.json()
+                    logger.info(f"[WA-OTP] Template (simple) send: {resp2.status_code} - {str(resp2_data)[:200]}")
+                    if resp2.status_code == 200 and resp2_data.get("messages"):
+                        return {"sent": True, "method": "whatsapp_template_simple", "error": None}
+            except Exception as e:
+                logger.warning(f"[WA-OTP] Template method failed: {e}")
+
+        # ── Method 2: Plain text message (works within 24-hour contact window) ──
+        otp_message = (
+            f"🔐 *ASR Enterprises — OTP Verification*\n\n"
+            f"Your One-Time Password is:\n\n"
+            f"*{otp_code}*\n\n"
+            f"Valid for 5 minutes. Do NOT share this code with anyone.\n\n"
+            f"— ASR Enterprises Solar ☀️"
+        )
+        payload_text = {
+            "messaging_product": "whatsapp",
+            "to": mobile_with_country,
+            "type": "text",
+            "text": {"body": otp_message},
+        }
+        try:
+            resp = await client.post(api_url, json=payload_text, headers=headers)
+            resp_data = resp.json()
+            logger.info(f"[WA-OTP] Text send: {resp.status_code} - {str(resp_data)[:200]}")
+            if resp.status_code == 200 and resp_data.get("messages"):
+                return {"sent": True, "method": "whatsapp_text", "error": None}
+            err = resp_data.get("error", {}).get("message", "Unknown error")
+            return {"sent": False, "method": "whatsapp_text", "error": err}
+        except Exception as e:
+            logger.warning(f"[WA-OTP] Text method failed: {e}")
+            return {"sent": False, "method": None, "error": str(e)}
+
+
+# =============================================
+# MSG91 OTP - SMS FALLBACK
 # =============================================
 
 MSG91_AUTH_KEY = os.environ.get("MSG91_AUTH_KEY", "")
 MSG91_SENDER_ID = os.environ.get("MSG91_SENDER_ID", "ASRSOL")
 MSG91_WIDGET_ID = os.environ.get("MSG91_WIDGET_ID", "")
 MSG91_TOKEN_AUTH = os.environ.get("MSG91_TOKEN_AUTH", "")
-# DLT-approved OTP template ID from MSG91 dashboard (required for India delivery)
+# DLT-approved OTP template ID from MSG91 dashboard (required for India SMS delivery)
 MSG91_OTP_TEMPLATE_ID = os.environ.get("MSG91_OTP_TEMPLATE_ID", "")
 # MSG91 Flow ID for flow-based OTP (optional, leave blank if not configured)
 MSG91_FLOW_ID = os.environ.get("MSG91_FLOW_ID", "")
@@ -7070,83 +7186,95 @@ async def _send_otp_impl(data: Dict[str, Any]):
         upsert=True
     )
     
-    # Try sending via MSG91 OTP API
     sent = False
     send_method = "none"
     msg91_request_id = None
-    
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            # Method 1: MSG91 OTP API v5 (primary)
-            # Include template_id if set for DLT compliance (required for India SMS delivery)
-            try:
-                otp_payload = {
-                    "mobile": mobile_with_country,
-                    "otp": otp_code,
-                    "otp_length": 6,
-                    "otp_expiry": 5,
-                    "sender": MSG91_SENDER_ID
-                }
-                if MSG91_OTP_TEMPLATE_ID:
-                    otp_payload["template_id"] = MSG91_OTP_TEMPLATE_ID
-                otp_response = await client.post(
-                    "https://control.msg91.com/api/v5/otp",
-                    headers={
-                        "authkey": MSG91_AUTH_KEY,
-                        "Content-Type": "application/json"
-                    },
-                    json=otp_payload
-                )
-                logger.info(f"[OTP] MSG91 OTP API response: {otp_response.status_code} - {otp_response.text[:300]}")
-                if otp_response.status_code == 200:
-                    resp_data = otp_response.json()
-                    if resp_data.get("type") == "success":
-                        sent = True
-                        send_method = "msg91_otp_api"
-                        msg91_request_id = resp_data.get("request_id")
-            except Exception as e:
-                logger.warning(f"[OTP] MSG91 OTP API failed: {e}")
+    delivery_channel = "sms"   # "whatsapp" or "sms" — used to tailor user-facing message
 
-            # Method 2: MSG91 Flow API (only if flow_id is configured)
-            if not sent and MSG91_FLOW_ID:
+    # ── PRIMARY: WhatsApp OTP (no DLT registration needed) ───────────────────
+    wa_result = await _send_whatsapp_otp(mobile_with_country, otp_code)
+    if wa_result.get("sent"):
+        sent = True
+        send_method = wa_result["method"]
+        delivery_channel = "whatsapp"
+        logger.info(f"[OTP] WhatsApp OTP sent to ****{mobile_clean[-4:]} via {send_method}")
+    else:
+        logger.warning(f"[OTP] WhatsApp OTP failed ({wa_result.get('error')}) — falling back to MSG91 SMS")
+
+    # ── FALLBACK: MSG91 SMS OTP ───────────────────────────────────────────────
+    if not sent:
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                # Method 1: MSG91 OTP API v5
                 try:
-                    flow_response = await client.post(
-                        "https://api.msg91.com/api/v5/flow/",
+                    otp_payload = {
+                        "mobile": mobile_with_country,
+                        "otp": otp_code,
+                        "otp_length": 6,
+                        "otp_expiry": 5,
+                        "sender": MSG91_SENDER_ID
+                    }
+                    if MSG91_OTP_TEMPLATE_ID:
+                        otp_payload["template_id"] = MSG91_OTP_TEMPLATE_ID
+                    otp_response = await client.post(
+                        "https://control.msg91.com/api/v5/otp",
                         headers={
                             "authkey": MSG91_AUTH_KEY,
                             "Content-Type": "application/json"
                         },
-                        json={
-                            "flow_id": MSG91_FLOW_ID,
-                            "sender": MSG91_SENDER_ID,
-                            "mobiles": mobile_with_country,
-                            "OTP": otp_code
-                        }
+                        json=otp_payload
                     )
-                    logger.info(f"[OTP] MSG91 Flow API response: {flow_response.status_code} - {flow_response.text[:300]}")
-                    if flow_response.status_code == 200:
-                        flow_data = flow_response.json()
-                        if flow_data.get("type") == "success":
+                    logger.info(f"[OTP] MSG91 OTP API response: {otp_response.status_code} - {otp_response.text[:300]}")
+                    if otp_response.status_code == 200:
+                        resp_data = otp_response.json()
+                        if resp_data.get("type") == "success":
                             sent = True
-                            send_method = "msg91_flow_api"
+                            send_method = "msg91_otp_api"
+                            msg91_request_id = resp_data.get("request_id")
                 except Exception as e:
-                    logger.warning(f"[OTP] MSG91 Flow API failed: {e}")
+                    logger.warning(f"[OTP] MSG91 OTP API failed: {e}")
 
-    except Exception as e:
-        logger.error(f"[OTP] All MSG91 send methods failed: {e}")
+                # Method 2: MSG91 Flow API (only if flow_id is configured)
+                if not sent and MSG91_FLOW_ID:
+                    try:
+                        flow_response = await client.post(
+                            "https://api.msg91.com/api/v5/flow/",
+                            headers={
+                                "authkey": MSG91_AUTH_KEY,
+                                "Content-Type": "application/json"
+                            },
+                            json={
+                                "flow_id": MSG91_FLOW_ID,
+                                "sender": MSG91_SENDER_ID,
+                                "mobiles": mobile_with_country,
+                                "OTP": otp_code
+                            }
+                        )
+                        logger.info(f"[OTP] MSG91 Flow API response: {flow_response.status_code} - {flow_response.text[:300]}")
+                        if flow_response.status_code == 200:
+                            flow_data = flow_response.json()
+                            if flow_data.get("type") == "success":
+                                sent = True
+                                send_method = "msg91_flow_api"
+                    except Exception as e:
+                        logger.warning(f"[OTP] MSG91 Flow API failed: {e}")
 
-    # Email fallback for owner/admin mobile (when SMS fails)
+        except Exception as e:
+            logger.error(f"[OTP] All MSG91 send methods failed: {e}")
+
+    # ── LAST RESORT: Email fallback for admin/owner ───────────────────────────
     if not sent and mobile_clean == OWNER_MOBILE[-10:]:
         try:
             email_sent = await send_otp_email(OWNER_EMAIL, otp_code, "Admin Mobile OTP")
             if email_sent:
                 sent = True
                 send_method = "email_fallback"
+                delivery_channel = "email"
                 logger.info(f"[OTP] Admin OTP sent via email fallback to {OWNER_EMAIL}")
         except Exception as e:
             logger.warning(f"[OTP] Email fallback failed: {e}")
-    
-    # Also store msg91_request_id to enable MSG91-side OTP verify as fallback
+
+    # Store msg91_request_id to enable MSG91-side OTP verify as dual-fallback
     if msg91_request_id:
         await db.otp_store.update_one(
             {"mobile": mobile_clean},
@@ -7154,22 +7282,30 @@ async def _send_otp_impl(data: Dict[str, Any]):
         )
 
     if sent:
-        logger.info(f"[OTP] OTP sent to {mobile_clean[-4:].rjust(10, '*')} via {send_method}")
+        logger.info(f"[OTP] OTP sent to ****{mobile_clean[-4:]} via {send_method}")
+        masked = f"+91 XXXXXX{mobile_clean[-4:]}"
+        if delivery_channel == "whatsapp":
+            user_msg = f"OTP sent to your WhatsApp ({masked}). Check WhatsApp and enter the code below."
+        elif delivery_channel == "email":
+            user_msg = f"OTP sent to admin email (SMS/WhatsApp unavailable)."
+        else:
+            user_msg = f"OTP sent via SMS to {masked}."
         return {
             "success": True,
             "type": "success",
-            "message": f"OTP sent to +91 {mobile_clean[-4:].rjust(10, '*')}",
-            "method": send_method
+            "message": user_msg,
+            "method": send_method,
+            "channel": delivery_channel
         }
     else:
-        # OTP stored in DB even if SMS failed
-        logger.warning(f"[OTP] SMS delivery failed for {mobile_clean[-4:].rjust(10, '*')} — OTP stored in DB only")
+        logger.warning(f"[OTP] All delivery methods failed for ****{mobile_clean[-4:]}")
         return {
             "success": False,
             "type": "error",
-            "message": "Could not send OTP via SMS. Please check your MSG91 configuration (DLT template ID, sender ID) or contact support.",
+            "message": "Could not deliver OTP. Please try again or contact support at 9296389097.",
             "method": "failed",
-            "note": "OTP stored locally. Configure MSG91_OTP_TEMPLATE_ID for reliable India SMS delivery."
+            "channel": "none",
+            "note": "WhatsApp OTP requires the user to have an active WhatsApp account on this number. SMS OTP requires MSG91_OTP_TEMPLATE_ID for India delivery."
         }
 
 
@@ -7284,26 +7420,52 @@ async def resend_otp(request: Request, data: Dict[str, Any]):
 
 @api_router.get("/otp/status")
 async def otp_status():
-    """Admin diagnostic: check MSG91 OTP configuration status (no secrets exposed)."""
+    """Admin diagnostic: check OTP delivery configuration (no secrets exposed)."""
+    # WhatsApp (primary)
+    has_wa_token = bool(_WA_OTP_ACCESS_TOKEN)
+    has_wa_phone_id = bool(_WA_OTP_PHONE_NUMBER_ID)
+    wa_ready = has_wa_token and has_wa_phone_id
+    has_wa_template = bool(WHATSAPP_OTP_TEMPLATE_NAME)
+
+    # MSG91 SMS (fallback)
     has_auth_key = bool(MSG91_AUTH_KEY)
     has_template_id = bool(MSG91_OTP_TEMPLATE_ID)
     has_flow_id = bool(MSG91_FLOW_ID)
     has_widget = bool(MSG91_WIDGET_ID)
     has_token_auth = bool(MSG91_TOKEN_AUTH)
+
+    recommendations = []
+    if not wa_ready:
+        recommendations.append("Set WHATSAPP_ACCESS_TOKEN and WHATSAPP_PHONE_NUMBER_ID to enable WhatsApp OTP (primary channel)")
+    if not has_wa_template:
+        recommendations.append(
+            "Optional: Create an Authentication-category template in Meta Business Manager and set "
+            "WHATSAPP_OTP_TEMPLATE_NAME=<your_template_name> to send OTP to users outside the 24-hour window"
+        )
+    if not has_auth_key:
+        recommendations.append("Set MSG91_AUTH_KEY to enable SMS OTP fallback")
+    if not has_template_id:
+        recommendations.append(
+            "Set MSG91_OTP_TEMPLATE_ID for DLT-compliant SMS delivery (India). "
+            "Get from MSG91 Dashboard → SMS → OTP Templates → DLT Template ID"
+        )
+
     return {
-        "msg91_configured": has_auth_key,
-        "sender_id": MSG91_SENDER_ID,
-        "dlt_template_id_set": has_template_id,
-        "flow_id_set": has_flow_id,
-        "widget_configured": has_widget and has_token_auth,
-        "recommendations": [
-            *([] if has_auth_key else ["Set MSG91_AUTH_KEY secret"]),
-            *([] if has_template_id else [
-                "Set MSG91_OTP_TEMPLATE_ID for DLT-compliant India SMS delivery. "
-                "Get this from MSG91 Dashboard → SMS → OTP Templates → DLT Template ID"
-            ]),
-            *([] if has_widget else ["Set MSG91_WIDGET_ID and MSG91_TOKEN_AUTH for widget-based OTP"]),
-        ]
+        "primary_channel": "whatsapp" if wa_ready else "sms",
+        "whatsapp_otp": {
+            "configured": wa_ready,
+            "phone_number_id_set": has_wa_phone_id,
+            "access_token_set": has_wa_token,
+            "template_name": WHATSAPP_OTP_TEMPLATE_NAME or "(plain text mode — works for existing contacts)",
+        },
+        "sms_fallback": {
+            "msg91_configured": has_auth_key,
+            "sender_id": MSG91_SENDER_ID,
+            "dlt_template_id_set": has_template_id,
+            "flow_id_set": has_flow_id,
+            "widget_configured": has_widget and has_token_auth,
+        },
+        "recommendations": recommendations,
     }
 
 
