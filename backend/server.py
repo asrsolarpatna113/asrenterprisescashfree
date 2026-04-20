@@ -7154,19 +7154,68 @@ async def _send_otp_impl(data: Dict[str, Any]):
     to trigger an OTP internally (resend, customer login, solar advisor
     login). Keeping this separate prevents double-counting against the
     SlowAPI rate-limit bucket on nested calls.
+
+    Parameters (in ``data``):
+      mobile            : 10-digit mobile number (required)
+      registered_only   : bool (default False) — if True, reject unregistered numbers
     """
     _require_msg91()
     mobile = data.get("mobile", "").replace(" ", "").replace("+", "")
     if not mobile:
         raise HTTPException(status_code=400, detail="Mobile number is required")
-    
-    # Clean mobile - ensure 10 digits
+
+    # Clean mobile — ensure 10 digits
     mobile_clean = mobile[-10:] if len(mobile) >= 10 else mobile
     if len(mobile_clean) != 10 or not mobile_clean.isdigit():
         raise HTTPException(status_code=400, detail="Invalid mobile number. Enter 10 digits.")
-    
+
+    # ── REGISTRATION CHECK ──────────────────────────────────────────────────
+    # When registered_only=True (admin/staff login), the mobile must belong to
+    # a known staff member or registered customer. Inquiry forms and Solar
+    # Advisor registration forms pass registered_only=False (default) to allow
+    # any number.
+    registered_only: bool = bool(data.get("registered_only", False))
+    if registered_only:
+        is_owner = (mobile_clean == OWNER_MOBILE[-10:])
+        is_staff = None
+        is_customer = None
+        if not is_owner:
+            is_staff = await db.crm_staff_accounts.find_one(
+                {"$or": [{"mobile": mobile_clean}, {"phone": mobile_clean}], "is_active": True},
+                {"_id": 0, "staff_id": 1},
+            )
+        if not is_owner and not is_staff:
+            is_customer = await db.customers.find_one(
+                {"mobile": mobile_clean}, {"_id": 0, "name": 1}
+            )
+        if not (is_owner or is_staff or is_customer):
+            logger.warning(f"[OTP] Registration check failed for ****{mobile_clean[-4:]}")
+            raise HTTPException(
+                status_code=404,
+                detail="This mobile number is not registered. Please register first or contact ASR Enterprises at 9296389097.",
+            )
+        logger.info(f"[OTP] Registration check passed for ****{mobile_clean[-4:]}")
+
+    # ── COOLDOWN CHECK (60 sec between OTP sends per mobile) ───────────────
+    # Prevents users from flooding the OTP endpoint. Enforced server-side so
+    # the UI timer alone cannot be bypassed.
+    OTP_RESEND_COOLDOWN = 60  # seconds
+    existing_record = await db.otp_store.find_one({"mobile": mobile_clean}, {"_id": 0, "created_at": 1})
+    if existing_record and isinstance(existing_record.get("created_at"), datetime):
+        stored_time = existing_record["created_at"]
+        # MongoDB may return timezone-naive datetime (UTC) — normalise to aware
+        if stored_time.tzinfo is None:
+            stored_time = stored_time.replace(tzinfo=timezone.utc)
+        elapsed = (datetime.now(timezone.utc) - stored_time).total_seconds()
+        if elapsed < OTP_RESEND_COOLDOWN:
+            remaining = int(OTP_RESEND_COOLDOWN - elapsed)
+            raise HTTPException(
+                status_code=429,
+                detail=f"Please wait {remaining} more second{'s' if remaining != 1 else ''} before requesting a new OTP.",
+            )
+
     mobile_with_country = "91" + mobile_clean
-    
+
     # Generate 6-digit OTP
     otp_code = str(random.randint(100000, 999999))
     

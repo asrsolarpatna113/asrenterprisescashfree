@@ -52,8 +52,8 @@ export const AdminLogin = ({ onLogin }) => {
     setSuccess("Sending OTP...");
     
     try {
-      // PRIMARY: Use backend API to send OTP
-      const response = await axios.post(`${API}/otp/send`, { mobile: phoneClean });
+      // PRIMARY: Use backend API to send OTP (registered_only checks staff DB)
+      const response = await axios.post(`${API}/otp/send`, { mobile: phoneClean, registered_only: true });
       console.log("[AdminLogin] Backend OTP response:", response.data);
       
       if (response.data.success) {
@@ -75,6 +75,14 @@ export const AdminLogin = ({ onLogin }) => {
         console.warn("[AdminLogin] Backend OTP send failed:", response.data);
       }
     } catch (backendErr) {
+      const status = backendErr?.response?.status;
+      const errDetail = backendErr?.response?.data?.detail;
+      // 404 = not registered, 429 = cooldown — show the error, don't fall through to widget
+      if (status === 404 || status === 429) {
+        setError(errDetail || "Cannot send OTP. Please check your details.");
+        setOtpLoading(false);
+        return;
+      }
       console.warn("[AdminLogin] Backend OTP failed, trying widget:", backendErr?.response?.data || backendErr.message);
     }
     
@@ -227,13 +235,19 @@ export const AdminLogin = ({ onLogin }) => {
     setOtp("");
     
     try {
-      // Use backend API
-      const response = await axios.post(`${API}/otp/send`, { mobile: phoneClean });
+      // Use backend API (registered_only so only registered staff can resend)
+      const response = await axios.post(`${API}/otp/send`, { mobile: phoneClean, registered_only: true });
       if (response.data.success) {
-        setResendTimer(30);
+        setResendTimer(60);
         setSuccess("OTP resent successfully!");
       }
     } catch (err) {
+      const status = err?.response?.status;
+      if (status === 429) {
+        setError(err?.response?.data?.detail || "Please wait before requesting a new OTP.");
+        setOtpLoading(false);
+        return;
+      }
       // Try widget fallback
       try {
         if (typeof window.retryOtp === 'function') {
@@ -303,11 +317,11 @@ export const AdminLogin = ({ onLogin }) => {
     try {
       const ADMIN_MOBILE = "8877896889";
       
-      // PRIMARY: Backend API
-      const response = await axios.post(`${API}/otp/send`, { mobile: ADMIN_MOBILE });
+      // PRIMARY: Backend API (registered_only ensures only known staff get OTP)
+      const response = await axios.post(`${API}/otp/send`, { mobile: ADMIN_MOBILE, registered_only: true });
       if (response.data.success) {
         setOtpSent(true);
-        setResendTimer(30);
+        setResendTimer(60);
         const channel2fa = response.data.channel || "";
         const method2fa = response.data.method || "";
         if (channel2fa === "whatsapp") {
@@ -321,6 +335,13 @@ export const AdminLogin = ({ onLogin }) => {
         return;
       }
     } catch (err) {
+      const status = err?.response?.status;
+      const errDetail = err?.response?.data?.detail;
+      if (status === 404 || status === 429) {
+        setError(errDetail || "Cannot send OTP. Please contact support.");
+        setOtpLoading(false);
+        return;
+      }
       console.warn("[AdminLogin] Backend 2FA OTP failed:", err.message);
     }
     

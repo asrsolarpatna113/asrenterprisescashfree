@@ -53,18 +53,26 @@ export const StaffLogin = () => {
     setSuccess("Sending OTP...");
     
     try {
-      // PRIMARY: Backend API
-      const response = await axios.post(`${API}/otp/send`, { mobile: phoneClean });
+      // PRIMARY: Backend API (registered_only = only registered staff allowed)
+      const response = await axios.post(`${API}/otp/send`, { mobile: phoneClean, registered_only: true });
       console.log("[StaffLogin] Backend OTP response:", response.data);
       
       if (response.data.success) {
         setOtpSent(true);
-        setResendTimer(30);
-        setSuccess("OTP sent successfully! Check your phone.");
+        setResendTimer(60);
+        const ch = response.data.channel || "";
+        setSuccess(ch === "whatsapp" ? "OTP sent to your WhatsApp! Open WhatsApp and enter the code." : "OTP sent successfully! Check your phone.");
         setOtpLoading(false);
         return;
       }
     } catch (backendErr) {
+      const status = backendErr?.response?.status;
+      const errDetail = backendErr?.response?.data?.detail;
+      if (status === 404 || status === 429) {
+        setError(errDetail || "Cannot send OTP. Please check your details.");
+        setOtpLoading(false);
+        return;
+      }
       console.warn("[StaffLogin] Backend OTP failed:", backendErr?.response?.data || backendErr.message);
     }
     
@@ -218,17 +226,23 @@ export const StaffLogin = () => {
     setMobileOtp("");
     
     try {
-      const response = await axios.post(`${API}/otp/send`, { mobile: phoneClean });
+      const response = await axios.post(`${API}/otp/send`, { mobile: phoneClean, registered_only: true });
       if (response.data.success) {
-        setResendTimer(30);
+        setResendTimer(60);
         setSuccess("OTP resent successfully!");
       }
     } catch (err) {
+      const status = err?.response?.status;
+      if (status === 429) {
+        setError(err?.response?.data?.detail || "Please wait before requesting a new OTP.");
+        setOtpLoading(false);
+        return;
+      }
       try {
         if (typeof window.sendOtp === 'function') {
           await window.sendOtp('91' + phoneClean);
         }
-        setResendTimer(30);
+        setResendTimer(60);
         setSuccess("OTP resent!");
       } catch (e) {
         setError("Failed to resend OTP. Please try again.");
@@ -294,12 +308,18 @@ export const StaffLogin = () => {
     setOtpLoading(true);
     const phoneClean = phoneNumber.replace(/\D/g, '').slice(-10);
     try {
-      const response = await axios.post(`${API}/otp/send`, { mobile: phoneClean });
+      const response = await axios.post(`${API}/otp/send`, { mobile: phoneClean, registered_only: true });
       if (response.data.success) {
         setOtpSent(true);
-        setResendTimer(30);
+        setResendTimer(60);
       }
     } catch (err) {
+      const status = err?.response?.status;
+      if (status === 404 || status === 429) {
+        setError(err?.response?.data?.detail || "Cannot send OTP.");
+        setOtpLoading(false);
+        return;
+      }
       // Fallback to widget
       try {
         if (typeof window.sendOtp === 'function') {
@@ -439,17 +459,23 @@ export const StaffLogin = () => {
     setOtpLoading(true);
     const phoneClean = phoneNumber.replace(/\D/g, '').slice(-10);
     try {
-      const response = await axios.post(`${API}/otp/send`, { mobile: phoneClean });
+      const response = await axios.post(`${API}/otp/send`, { mobile: phoneClean, registered_only: true });
       if (response.data.success) {
         setOtpSent(true);
-        setResendTimer(30);
+        setResendTimer(60);
       }
     } catch (err) {
+      const status = err?.response?.status;
+      if (status === 404 || status === 429) {
+        setError(err?.response?.data?.detail || "Cannot send OTP.");
+        setOtpLoading(false);
+        return;
+      }
       try {
         if (typeof window.sendOtp === 'function') await window.sendOtp('91' + phoneClean);
       } catch(e) {}
       setOtpSent(true);
-      setResendTimer(30);
+      setResendTimer(60);
     } finally {
       setOtpLoading(false);
     }
