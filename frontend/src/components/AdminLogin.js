@@ -202,15 +202,19 @@ export const AdminLogin = ({ onLogin }) => {
         localStorage.setItem("asrAdminStaffId", response.data.staff_id || "");
         localStorage.setItem("asrAdminLastActivity", Date.now().toString());
         
-        setSuccess("Login successful! Redirecting...");
+        const loginRole = (response.data.role || "").toLowerCase();
+        // Block non-admin accounts — staff must use the Staff Login page
+        if (loginRole === "staff" || (loginRole === "manager" && (response.data.department || "").toLowerCase() !== "admin")) {
+          setError("This is a Staff account. Please log in at the Staff Portal: /staff/login");
+          setLoading(false);
+          setVerifyLoading(false);
+          return;
+        }
         
+        setSuccess("Login successful! Redirecting...");
         setTimeout(() => {
           onLogin();
-          if (response.data.role === "staff") {
-            navigate("/staff/dashboard");
-          } else {
-            navigate("/admin/dashboard");
-          }
+          navigate("/admin/dashboard");
         }, 1000);
       } else {
         setError(response.data.message || "Mobile number not registered. Contact admin.");
@@ -441,23 +445,27 @@ export const AdminLogin = ({ onLogin }) => {
 
   // Complete login and redirect
   const completeLogin = (data) => {
+    const loginRole = (data.role || "").toLowerCase();
+    const loginDept = (data.department || "").toLowerCase();
+    
+    // Block non-admin accounts — staff must use the Staff Login page
+    if (loginRole === "staff" || (loginRole === "manager" && loginDept !== "admin")) {
+      setError("This is a Staff account. Please log in at the Staff Portal: /staff/login");
+      return;
+    }
+    
     localStorage.setItem("asrAdminAuth", "true");
     localStorage.setItem("asrAdminEmail", data.email || userId);
-    localStorage.setItem("asrAdminRole", data.role || "admin");
+    localStorage.setItem("asrAdminRole", loginRole || "admin");
     localStorage.setItem("asrAdminName", data.name || "Admin");
-    localStorage.setItem("asrAdminDepartment", (data.department || "").toLowerCase());
+    localStorage.setItem("asrAdminDepartment", loginDept);
     localStorage.setItem("asrAdminStaffId", data.staff_id || "");
     localStorage.setItem("asrAdminLastActivity", Date.now().toString());
     
     setSuccess("Login successful! Redirecting...");
-    
     setTimeout(() => {
       onLogin();
-      if (data.role === "staff") {
-        navigate("/staff/dashboard");
-      } else {
-        navigate("/admin/dashboard");
-      }
+      navigate("/admin/dashboard");
     }, 1000);
   };
 

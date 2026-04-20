@@ -3958,6 +3958,14 @@ async def admin_login_otp(request: Request, data: Dict[str, Any]):
     )
     
     if staff:
+        # Block admin/super_admin accounts from using the staff login path
+        staff_role = (staff.get("role") or "").lower()
+        if staff_role in {"super_admin", "admin"}:
+            logger.warning(f"Admin account {staff.get('staff_id')} attempted staff portal login from IP: {client_ip}")
+            raise HTTPException(
+                status_code=403,
+                detail="This is an Admin account. Please log in at the Admin Login page."
+            )
         reset_failed_login(client_ip, mobile)
         logger.info(f"Successful OTP login for staff {staff.get('name')} from IP: {client_ip}")
         # Look up department from HR record
@@ -3970,7 +3978,7 @@ async def admin_login_otp(request: Request, data: Dict[str, Any]):
             pass
         return {
             "success": True, 
-            "role": staff.get("role", "staff"), 
+            "role": staff_role or "staff", 
             "email": staff.get("email"),
             "name": staff.get("name"),
             "staff_id": staff.get("staff_id"),
@@ -4464,6 +4472,10 @@ async def staff_login(request: Request, data: Dict[str, Any]):
     if not staff:
         raise HTTPException(status_code=401, detail="Invalid Staff ID or Password")
     
+    # Block admin/super_admin accounts — they must use Admin Login
+    if (staff.get("role") or "").lower() in {"super_admin", "admin"}:
+        raise HTTPException(status_code=403, detail="This is an Admin account. Please log in at the Admin Login page.")
+    
     # Get staff phone for 2FA
     phone = staff.get("phone", "")
     mobile_last4 = phone[-4:] if phone else "****"
@@ -4521,6 +4533,10 @@ async def staff_login_email(request: Request, data: Dict[str, Any]):
     if not staff:
         raise HTTPException(status_code=401, detail="Invalid email or password")
     
+    # Block admin/super_admin accounts — they must use Admin Login
+    if (staff.get("role") or "").lower() in {"super_admin", "admin"}:
+        raise HTTPException(status_code=403, detail="This is an Admin account. Please log in at the Admin Login page.")
+    
     reset_failed_login(client_ip, email)
     
     # Generate token
@@ -4564,6 +4580,9 @@ async def staff_verify_2fa(request: Request, data: Dict[str, Any]):
         # Get staff data from session
         staff = pending_session.get("staff")
         if staff:
+            # Block admin/super_admin accounts — they must use Admin Login
+            if (staff.get("role") or "").lower() in {"super_admin", "admin"}:
+                raise HTTPException(status_code=403, detail="This is an Admin account. Please log in at the Admin Login page.")
             # Clean up pending session
             await db.pending_2fa_sessions.delete_one({"staff_id": staff_id})
             
@@ -4585,6 +4604,10 @@ async def staff_verify_2fa(request: Request, data: Dict[str, Any]):
     
     if not staff:
         raise HTTPException(status_code=401, detail="Staff account not found")
+    
+    # Block admin/super_admin accounts — they must use Admin Login
+    if (staff.get("role") or "").lower() in {"super_admin", "admin"}:
+        raise HTTPException(status_code=403, detail="This is an Admin account. Please log in at the Admin Login page.")
     
     # Create session token
     session_token = secrets.token_urlsafe(32)
@@ -4769,6 +4792,10 @@ async def staff_verify_otp(request: Request, data: Dict[str, Any]):
     
     if not staff:
         raise HTTPException(status_code=404, detail="Staff not found")
+    
+    # Block admin/super_admin accounts — they must use Admin Login
+    if (staff.get("role") or "").lower() in {"super_admin", "admin"}:
+        raise HTTPException(status_code=403, detail="This is an Admin account. Please log in at the Admin Login page.")
     
     # Create session token
     session_token = str(uuid.uuid4())
